@@ -78,7 +78,19 @@ class Discovery:
         for name in names:
             candidate = directory / name
             if candidate.is_file() and not safe_paths.is_link_like(candidate):
-                ignore = ignore.merged(IgnoreSet.from_file(candidate))
+                loaded = IgnoreSet.from_file(candidate)
+                if loaded.overflowed:
+                    self.errors.append(
+                        ScanError(
+                            path=safe_paths.relative_display(self._root, candidate),
+                            reason="ignore-file-too-complex",
+                            detail=(
+                                "vượt hạn mức mẫu nên toàn bộ quy tắc trong tệp này bị bỏ; "
+                                "không tệp nào bị ẩn khỏi lượt quét"
+                            ),
+                        )
+                    )
+                ignore = ignore.merged(loaded)
         return ignore
 
     def _walk_directory(
