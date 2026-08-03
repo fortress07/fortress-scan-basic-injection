@@ -78,6 +78,7 @@ class Config:
     file_timeout_seconds: float = DEFAULT_FILE_SECONDS
     follow_symlinks: bool = False
     honor_inline_suppressions: bool = True
+    respect_ignore_files: bool = True
     respect_vcs_ignore: bool = True
     include_low_signal_sources: bool = False
     jobs: int = 1
@@ -110,6 +111,7 @@ _ALLOWED_KEYS = frozenset(
         "file_timeout_seconds",
         "follow_symlinks",
         "honor_inline_suppressions",
+        "respect_ignore_files",
         "respect_vcs_ignore",
         "include_low_signal_sources",
         "jobs",
@@ -131,6 +133,7 @@ _BOOL_KEYS = frozenset(
     (
         "follow_symlinks",
         "honor_inline_suppressions",
+        "respect_ignore_files",
         "respect_vcs_ignore",
         "include_low_signal_sources",
     )
