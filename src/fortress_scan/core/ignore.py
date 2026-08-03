@@ -195,23 +195,30 @@ def compile_rule(raw: str) -> Optional[IgnoreRule]:
 
 
 class IgnoreSet:
-    def __init__(self, rules: Sequence[IgnoreRule] = ()) -> None:
+    def __init__(self, rules: Sequence[IgnoreRule] = (), overflowed: bool = False) -> None:
         self._rules: Tuple[IgnoreRule, ...] = tuple(rules)
+        self._overflowed = overflowed
 
     def __bool__(self) -> bool:
         return bool(self._rules)
+
+    @property
+    def overflowed(self) -> bool:
+        return self._overflowed
 
     @classmethod
     def from_lines(cls, lines: Sequence[str]) -> "IgnoreSet":
         rules: List[IgnoreRule] = []
         budget = _MAX_TOTAL_TOKENS
-        for raw in lines[:_MAX_PATTERNS]:
+        if len(lines) > _MAX_PATTERNS:
+            return cls((), overflowed=True)
+        for raw in lines:
             rule = compile_rule(raw)
             if rule is None:
                 continue
             budget -= rule.matcher.token_count
             if budget < 0:
-                break
+                return cls((), overflowed=True)
             rules.append(rule)
         return cls(rules)
 
@@ -224,7 +231,9 @@ class IgnoreSet:
         return cls.from_lines(content.splitlines())
 
     def merged(self, other: "IgnoreSet") -> "IgnoreSet":
-        return IgnoreSet(self._rules + other._rules)
+        return IgnoreSet(
+            self._rules + other._rules, self._overflowed or other._overflowed
+        )
 
     def matches(self, relative_path: str, is_directory: bool) -> bool:
         decision = False

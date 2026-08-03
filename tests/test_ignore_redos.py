@@ -126,6 +126,66 @@ def test_pattern_budget_fails_safe_by_keeping_files_visible(tmp_path: Path):
     )
 
 
+def test_budget_overflow_discards_every_rule_not_just_the_tail():
+    filler = ["z" * 200 for _ in range(200)]
+    ignore = IgnoreSet.from_lines(["*.min.js"] + filler + ["!keep.min.js"])
+
+    assert ignore.overflowed
+    assert not ignore.matches("app.min.js", False), (
+        "luat dau tep van con hieu luc sau khi vuot han muc -> cat giua chung"
+    )
+    assert not ignore.matches("keep.min.js", False), (
+        "luat phu dinh o cuoi bi cat khien tep bi GIAU -> fail-open"
+    )
+
+
+def test_budget_overflow_never_hides_a_file_a_negation_wanted_kept(tmp_path: Path):
+    filler = "\n".join(("z" * 200) for _ in range(200))
+    (tmp_path / ".fortress-scanignore").write_text(
+        "*.py\n" + filler + "\n!keep.py\n", encoding="utf-8"
+    )
+    (tmp_path / "keep.py").write_text(
+        "import os\nfrom flask import request\n"
+        "def h():\n    os.system(request.args.get('c'))\n",
+        encoding="utf-8",
+    )
+
+    result = scan(str(tmp_path), Config())
+    assert any(f.rule_id == "FSB-CMD-001" for f in result.findings), (
+        "luat '!keep.py' bi han muc cat mat khien tep bi giau khoi luot quet"
+    )
+
+
+def test_budget_overflow_is_reported_and_not_silent(tmp_path: Path):
+    filler = "\n".join(("z" * 200) for _ in range(200))
+    (tmp_path / ".fortress-scanignore").write_text(filler, encoding="utf-8")
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+
+    result = scan(str(tmp_path), Config())
+    assert any(error.reason == "ignore-file-too-complex" for error in result.errors), (
+        "bo toan bo quy tac ma khong bao gi la im lang"
+    )
+
+
+def test_a_normal_sized_ignore_file_is_never_discarded():
+    realistic = [
+        "*.pyc",
+        "__pycache__/",
+        "node_modules/",
+        "**/migrations/**",
+        "docs/**",
+        "*.min.js",
+        "build/",
+        "dist/",
+        ".venv/",
+        "!keep.min.js",
+    ] * 20
+    ignore = IgnoreSet.from_lines(realistic)
+    assert not ignore.overflowed
+    assert ignore.matches("app.min.js", False)
+    assert not ignore.matches("keep.min.js", False)
+
+
 def test_no_ignore_files_flag_disables_scanignore(tmp_path: Path):
     (tmp_path / ".fortress-scanignore").write_text("secret.py\n", encoding="utf-8")
     (tmp_path / "secret.py").write_text(
