@@ -20,14 +20,47 @@ def run_with_timeout(function, seconds: float = BUDGET_SECONDS):
         started = time.monotonic()
         try:
             function()
-        except Exception as exc:
-            box["error"] = repr(exc)
-        box["elapsed"] = time.monotonic() - started
+        except BaseException as exc:
+            box["error"] = exc
+        finally:
+            box["elapsed"] = time.monotonic() - started
 
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
     thread.join(timeout=seconds)
-    return (not thread.is_alive()), box.get("elapsed")
+
+    if thread.is_alive():
+        return False, None
+
+    error = box.get("error")
+    if error is not None:
+        raise AssertionError(
+            "ham chay trong luong phu da nem loi thay vi hoan tat: %r" % error
+        ) from error
+    return True, box["elapsed"]
+
+
+def test_timeout_helper_reports_a_crash_instead_of_hiding_it():
+    def explode():
+        raise RuntimeError("scan() vo no")
+
+    with pytest.raises(AssertionError, match="nem loi"):
+        run_with_timeout(explode)
+
+
+def test_timeout_helper_reports_a_hang():
+    def sleep_forever():
+        time.sleep(30)
+
+    finished, elapsed = run_with_timeout(sleep_forever, seconds=0.3)
+    assert finished is False
+    assert elapsed is None
+
+
+def test_timeout_helper_reports_a_normal_return():
+    finished, elapsed = run_with_timeout(lambda: None)
+    assert finished is True
+    assert elapsed is not None and elapsed >= 0
 
 
 @pytest.mark.parametrize("groups", [8, 16, 32, 64])
