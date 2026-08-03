@@ -7,7 +7,7 @@ from typing import FrozenSet, List, Optional, Sequence, Tuple
 _MAX_PATTERN_LENGTH = 512
 _MAX_PATTERNS = 1000
 _MAX_TOTAL_TOKENS = 10000
-_MAX_PATH_LENGTH = 1024
+_MAX_PATH_LENGTH = 4096
 
 LITERAL = 0
 ANY_CHAR = 1
@@ -105,7 +105,7 @@ class GlobMatcher:
 
     def matches(self, text: str) -> bool:
         if len(text) > _MAX_PATH_LENGTH:
-            text = text[:_MAX_PATH_LENGTH]
+            return False
 
         tokens = self._tokens
         total_text = len(text)
