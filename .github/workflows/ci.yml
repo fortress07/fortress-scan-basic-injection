@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Cai dat
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Chay test
+        run: python -m pytest -q
+      - name: Phai bat duoc cac mau co loi
+        shell: bash
+        run: |
+          if python -m fortress_scan tests/samples/vulnerable --no-config --quiet; then
+            echo "::error::khong bat duoc loi nao trong cac mau co loi"
+            exit 1
+          fi
+          echo "cac mau co loi da duoc bao dung"
+      - name: Phai im lang voi cac mau an toan
+        run: python -m fortress_scan tests/samples/safe --no-config --fail-on info
+      - name: Tu quet chinh no
+        run: python -m fortress_scan src --fail-on low
+
+  sarif:
+    name: sarif
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - run: python -m fortress_scan src --format sarif --output fortress-scan.sarif --exit-zero
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: fortress-scan.sarif
