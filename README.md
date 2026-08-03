@@ -150,12 +150,24 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 
 ### Khi quét mã không đáng tin
 
-Chú thích `fortress-scan: ignore`, tệp `.fortress-scan.json` và `.gitignore` đều nằm **trong chính
-mã được quét**, nên người viết mã có thể dùng chúng để giấu phát hiện. Khi review code lạ, hãy chạy:
+Chú thích `fortress-scan: ignore`, tệp `.fortress-scan.json`, `.fortress-scanignore` và `.gitignore`
+đều nằm **trong chính mã được quét**, nên người viết mã có thể dùng chúng để giấu phát hiện. Khi
+review code lạ, hãy tắt cả bốn đường đó:
 
 ```bash
-python -m fortress_scan <duong-dan> --no-inline-suppressions --no-config --no-vcs-ignore
+python -m fortress_scan <duong-dan> \
+    --no-inline-suppressions \
+    --no-config \
+    --no-ignore-files \
+    --no-vcs-ignore
 ```
+
+| Cờ | Vô hiệu hoá |
+| --- | --- |
+| `--no-inline-suppressions` | chú thích `# fortress-scan: ignore` trong mã |
+| `--no-config` | tệp `.fortress-scan.json` |
+| `--no-ignore-files` | tệp `.fortress-scanignore` |
+| `--no-vcs-ignore` | tệp `.gitignore` |
 
 ---
 

@@ -70,7 +70,9 @@ class Discovery:
 
     def _load_ignore_files(self, directory: Path) -> IgnoreSet:
         ignore = self._explicit
-        names = list(IGNORE_FILENAMES)
+        names: List[str] = []
+        if self._config.respect_ignore_files:
+            names.extend(IGNORE_FILENAMES)
         if self._config.respect_vcs_ignore:
             names.extend(VCS_IGNORE_FILENAMES)
         for name in names:
