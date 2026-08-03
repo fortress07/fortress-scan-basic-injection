@@ -154,27 +154,69 @@ def test_no_ignore_files_flag_also_defeats_a_hostile_pattern(tmp_path: Path):
     assert elapsed < BUDGET_SECONDS
 
 
-def test_all_three_hardening_flags_together(tmp_path: Path):
-    (tmp_path / ".fortress-scanignore").write_text("app.py\n", encoding="utf-8")
-    (tmp_path / ".gitignore").write_text("app.py\n", encoding="utf-8")
-    (tmp_path / ".fortress-scan.json").write_text(
+def _write_project_with_every_suppression(root: Path) -> None:
+    (root / ".fortress-scanignore").write_text("app.py\n", encoding="utf-8")
+    (root / ".gitignore").write_text("app.py\n", encoding="utf-8")
+    (root / ".fortress-scan.json").write_text(
         '{"disabled_rules": ["FSB-CMD-001"]}', encoding="utf-8"
     )
-    (tmp_path / "app.py").write_text(
+    (root / "app.py").write_text(
         "import os\nfrom flask import request\n"
         "def h():\n    os.system(request.args.get('c'))  # fortress-scan: ignore-file\n",
         encoding="utf-8",
     )
 
-    strict = Config(
-        respect_ignore_files=False,
-        respect_vcs_ignore=False,
-        honor_inline_suppressions=False,
+
+def _run_cli(arguments):
+    from fortress_scan.cli import main
+    from fortress_scan.security import runtime as sandbox
+
+    try:
+        return main(arguments)
+    finally:
+        sandbox.release()
+
+
+def test_cli_without_flags_is_fully_silenced_by_the_scanned_tree(tmp_path: Path):
+    _write_project_with_every_suppression(tmp_path)
+    assert _run_cli([str(tmp_path), "--quiet"]) == 0, (
+        "khong bat co nao thi ma duoc quet phai giau duoc phat hien"
     )
-    result = scan(str(tmp_path), strict)
-    assert any(f.rule_id == "FSB-CMD-001" for f in result.findings), (
-        "ba co cung bat phai vo hieu moi duong giau phat hien"
+
+
+def test_cli_with_all_four_hardening_flags_defeats_every_suppression(tmp_path: Path):
+    _write_project_with_every_suppression(tmp_path)
+    code = _run_cli(
+        [
+            str(tmp_path),
+            "--quiet",
+            "--no-inline-suppressions",
+            "--no-config",
+            "--no-ignore-files",
+            "--no-vcs-ignore",
+        ]
     )
+    assert code == 1, "bon co cung bat phai vo hieu moi duong giau phat hien"
+
+
+@pytest.mark.parametrize(
+    "missing_flag",
+    ["--no-inline-suppressions", "--no-config", "--no-ignore-files", "--no-vcs-ignore"],
+)
+def test_every_hardening_flag_is_individually_necessary(tmp_path: Path, missing_flag: str):
+    _write_project_with_every_suppression(tmp_path)
+    flags = [
+        flag
+        for flag in (
+            "--no-inline-suppressions",
+            "--no-config",
+            "--no-ignore-files",
+            "--no-vcs-ignore",
+        )
+        if flag != missing_flag
+    ]
+    code = _run_cli([str(tmp_path), "--quiet"] + flags)
+    assert code == 0, "thieu %s ma van bao duoc loi -> co nay thua" % missing_flag
 
 
 def test_config_file_accepts_respect_ignore_files():
@@ -202,6 +244,38 @@ def test_globstar_and_class_patterns_still_work():
     assert ignore.matches("abc.py", False)
     assert not ignore.matches("main.py", False)
     assert not ignore.matches("abcd.py", False)
+
+
+def test_long_paths_are_not_truncated_before_matching():
+    ignore = IgnoreSet.from_lines(["*.py"])
+    deep = "/".join("d" * 200 for _ in range(6)) + "/ma_nguon.py"
+    assert len(deep) > 1024
+    assert ignore.matches(deep, False), (
+        "duong dan dai bi cat truoc khi khop nen mat duoi .py"
+    )
+
+
+def test_absurdly_long_paths_do_not_match_instead_of_being_guessed():
+    ignore = IgnoreSet.from_lines(["*"])
+    absurd = "a" * 5000
+    assert not ignore.matches(absurd, False)
+
+
+def test_long_path_decision_matches_the_short_path_decision():
+    ignore = IgnoreSet.from_lines(["**/build/**", "*.log"])
+    short = "src/build/out.log"
+    long_prefix = "/".join("s" * 150 for _ in range(5))
+    long_path = long_prefix + "/src/build/out.log"
+    assert len(long_path) > 700
+    assert ignore.matches(short, False) == ignore.matches(long_path, False)
+
+
+def test_backslash_is_a_literal_character_not_an_escape():
+    ignore = IgnoreSet.from_lines(["a\\*b"])
+    assert ignore.matches("a\\xb", False)
+    assert ignore.matches("a\\b", False)
+    assert not ignore.matches("a*b", False)
+    assert not ignore.matches("axb", False)
 
 
 def test_wildcards_never_cross_a_path_separator():
