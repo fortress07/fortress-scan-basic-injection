@@ -229,6 +229,11 @@ python -m fortress_scan <duong-dan> \
 | `--no-ignore-files` | tệp `.fortress-scanignore` |
 | `--no-vcs-ignore` | tệp `.gitignore` |
 
+Nếu bạn quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi (tắt rule, loại trừ
+đường dẫn, nâng ngưỡng, hạ giới hạn kích thước…), công cụ **in cảnh báo ra stderr và nói rõ nó đã tắt
+những gì**. Một báo cáo "sạch" sinh ra từ cấu hình của người khác sẽ không im lặng nữa. Cảnh báo đi
+ra stderr nên không lẫn vào báo cáo JSON/SARIF khi bạn chuyển hướng stdout.
+
 ---
 
 ## Góp ý & báo lỗi

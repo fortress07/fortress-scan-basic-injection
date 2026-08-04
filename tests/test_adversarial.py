@@ -281,6 +281,118 @@ class TestEvasionAttempts:
         strict = Config(honor_inline_suppressions=False)
         assert "FSB-CMD-001" in rule_ids(source, strict)
 
+    def test_source_encoding_declaration_cannot_hide_code(self, tmp_path: Path):
+        """PEP 263: CPython đọc tệp theo bảng mã được khai báo.
+
+        Đọc cứng UTF-8 thì `+AAo-` chỉ là chữ trong một dòng chú thích, còn
+        CPython giải theo UTF-7 lại thấy đó là dấu xuống dòng -- nên toàn bộ
+        đoạn injection nằm ngoài AST và báo cáo sạch trơn.
+        """
+        (tmp_path / "evil.py").write_bytes(
+            b"# -*- coding: utf-7 -*-\n"
+            b"#+AAo-import os+AAo-from flask import request+AAo-"
+            b'def handler():+AAo-    os.system(request.args.get("h"))+AAo-\n'
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_encoding_declaration_snippet_shows_the_real_code(self, tmp_path: Path):
+        (tmp_path / "evil.py").write_bytes(
+            b"# coding: utf-7\n#+AAo-import os+AAo-os.system(input())+AAo-\n"
+        )
+        result = scan(str(tmp_path), Config())
+        command = [f for f in result.findings if f.rule_id == "FSB-CMD-001"]
+        assert command, "phai bat duoc injection that"
+        assert "os.system" in command[0].snippet
+
+    def test_encoding_declaration_on_the_second_line_is_honoured(self, tmp_path: Path):
+        (tmp_path / "evil.py").write_bytes(
+            b"#!/usr/bin/env python\n"
+            b"# coding: utf-7\n"
+            b"#+AAo-import os+AAo-os.system(input())+AAo-\n"
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_plain_utf8_python_is_unaffected(self, tmp_path: Path):
+        (tmp_path / "app.py").write_bytes(
+            "# -*- coding: utf-8 -*-\n"
+            "import os\n"
+            'ten = "Nguyễn Văn A"\n'
+            "def handler():\n"
+            "    os.system(input())\n".encode("utf-8")
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_bogus_encoding_declaration_does_not_crash(self, tmp_path: Path):
+        (tmp_path / "weird.py").write_bytes(
+            b"# coding: khong-ton-tai-dau\nimport os\nos.system(input())\n"
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_encoding_declaration_is_not_applied_to_other_languages(self, tmp_path: Path):
+        """PEP 263 chỉ là quy ước của Python; áp cho PHP sẽ tạo ra một desync mới."""
+        (tmp_path / "index.php").write_bytes(
+            b"<?php\n# coding: utf-7\n$cmd = $_GET['c'];\nsystem('ping ' . $cmd);\n"
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_project_config_hiding_is_announced_and_defeatable(self, tmp_path: Path):
+        """Tệp cấu hình nằm trong cây bị quét là do người viết mã đó kiểm soát.
+
+        Nó có thể biến exit 1 thành exit 0 và in ra "sạch"; im lặng ở đây chính
+        là thứ tạo ra false confidence, nên phải nói rõ đã tắt những gì.
+        """
+        import io
+        import sys
+
+        from fortress_scan.cli import main
+
+        (tmp_path / "app.py").write_text(
+            "import os\nfrom flask import request\n"
+            "def handler():\n    os.system(request.args.get('c'))\n",
+            encoding="utf-8",
+        )
+        (tmp_path / ".fortress-scan.json").write_text(
+            '{"disabled_rules": ["FSB-CMD-001", "FSB-CMD-003"]}', encoding="utf-8"
+        )
+
+        errors = io.StringIO()
+        original = sys.stderr
+        sys.stderr = errors
+        try:
+            hidden = main([str(tmp_path), "--no-color"])
+        finally:
+            sys.stderr = original
+
+        assert hidden == 0, "cấu hình của kẻ tấn công vẫn che được phát hiện"
+        message = errors.getvalue()
+        assert "thu hẹp phạm vi quét" in message, "phải cảnh báo khi phạm vi bị thu hẹp"
+        assert "FSB-CMD-001" in message, "phải nói rõ rule nào bị tắt"
+        assert "--no-config" in message, "phải chỉ ra cách bỏ qua tệp cấu hình"
+
+        assert main([str(tmp_path), "--no-color", "--no-config"]) == 1
+
+    def test_harmless_project_config_stays_quiet(self, tmp_path: Path):
+        import io
+        import sys
+
+        from fortress_scan.cli import main
+
+        (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / ".fortress-scan.json").write_text('{"jobs": 2}', encoding="utf-8")
+        errors = io.StringIO()
+        original = sys.stderr
+        sys.stderr = errors
+        try:
+            main([str(tmp_path), "--no-color"])
+        finally:
+            sys.stderr = original
+        assert "thu hẹp phạm vi quét" not in errors.getvalue()
+
     def test_vcs_ignore_hiding_is_defeatable(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("hidden.py\n", encoding="utf-8")
         (tmp_path / "hidden.py").write_text(
