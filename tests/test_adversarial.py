@@ -340,6 +340,105 @@ class TestEvasionAttempts:
         result = scan(str(tmp_path), Config())
         assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
 
+    def test_every_documented_suppression_scope_actually_works(self):
+        """`ignore-file` và `ignore-next-line` từng im lặng rơi về `ignore`.
+
+        Nhánh trong regex là "khớp cái đầu tiên", nên `ignore` đứng đầu nuốt
+        luôn tiền tố của hai phạm vi kia -- tài liệu ghi một đằng, công cụ làm
+        một nẻo, và người dùng không hiểu vì sao vẫn bị báo.
+        """
+        body = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(body), "mẫu gốc phải bị báo"
+
+        whole_file = "# fortress-scan: ignore-file\n" + body
+        assert "FSB-CMD-001" not in rule_ids(whole_file)
+
+        next_line = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    # fortress-scan: ignore-next-line\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(next_line)
+
+        same_line = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))  # fortress-scan: ignore\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(same_line)
+
+    def test_ignore_next_line_does_not_cover_other_lines(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    # fortress-scan: ignore-next-line\n"
+            "    a = request.args.get('c')\n"
+            "    os.system(a)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source), "chỉ được che đúng một dòng"
+
+    def test_every_suppression_scope_is_defeatable(self):
+        strict = Config(honor_inline_suppressions=False)
+        for directive in ("ignore-file", "ignore-next-line", "ignore"):
+            source = (
+                "# fortress-scan: %s\n"
+                "import os\n"
+                "from flask import request\n"
+                "def handler():\n"
+                "    # fortress-scan: %s\n"
+                "    os.system(request.args.get('c'))  # fortress-scan: %s\n"
+                % (directive, directive, directive)
+            )
+            assert "FSB-CMD-001" in rule_ids(source, strict), directive
+
+    def test_suppression_directive_inside_a_string_is_not_a_directive(self):
+        """Một hằng chuỗi không phải là chỉ thị.
+
+        Nếu tính, thì một dòng trông vô hại như HELP = "# fortress-scan:
+        ignore-file" sẽ tắt cả tệp mà không ai nhận ra khi review.
+        """
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            'HELP = "# fortress-scan: ignore-file"\n'
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_suppression_directive_inside_a_docstring_is_not_a_directive(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def helper():\n"
+            '    """Ví dụ: # fortress-scan: ignore-file"""\n'
+            "    return 1\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_suppression_directive_inside_a_multiline_docstring(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            'DOC = """\n'
+            "# fortress-scan: ignore-file\n"
+            '"""\n'
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
     def test_project_config_hiding_is_announced_and_defeatable(self, tmp_path: Path):
         """Tệp cấu hình nằm trong cây bị quét là do người viết mã đó kiểm soát.
 

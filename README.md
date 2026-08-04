@@ -224,10 +224,23 @@ python -m fortress_scan <duong-dan> \
 
 | Cờ | Vô hiệu hoá |
 | --- | --- |
-| `--no-inline-suppressions` | chú thích `# fortress-scan: ignore` trong mã |
+| `--no-inline-suppressions` | mọi chú thích `fortress-scan: ignore*` trong mã |
 | `--no-config` | tệp `.fortress-scan.json` |
 | `--no-ignore-files` | tệp `.fortress-scanignore` |
 | `--no-vcs-ignore` | tệp `.gitignore` |
+
+Có **ba** phạm vi chú thích, không chỉ một — `ignore-file` giấu được **cả tệp** nên đáng chú ý nhất
+khi đọc mã lạ:
+
+| Chú thích | Che |
+| --- | --- |
+| `# fortress-scan: ignore` | đúng dòng đang viết |
+| `# fortress-scan: ignore-next-line` | dòng ngay bên dưới |
+| `# fortress-scan: ignore-file` | **toàn bộ tệp** |
+
+Giới hạn theo rule bằng `# fortress-scan: ignore [FSB-CMD-001]`. Chú thích dùng được với `#`, `//`,
+`/*`, `--` và `<!--`. Chỉ thị **nằm trong chuỗi không được tính** — `HELP = "# fortress-scan:
+ignore-file"` chỉ là dữ liệu, không tắt gì cả.
 
 Nếu bạn quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi (tắt rule, loại trừ
 đường dẫn, nâng ngưỡng, hạ giới hạn kích thước…), công cụ **in cảnh báo ra stderr và nói rõ nó đã tắt
