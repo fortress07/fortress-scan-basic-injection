@@ -7,7 +7,7 @@ import pytest
 from fortress_scan.core.config import Config
 from fortress_scan.core.engine import scan_source
 from fortress_scan.core.registry import all_rules
-from fortress_scan.languages import JAVA, JAVASCRIPT, MANIFEST, PHP, PYTHON, SHELL
+from fortress_scan.languages import JAVA, JAVASCRIPT, MANIFEST, PYTHON, SHELL
 
 BIDI_OVERRIDE = chr(0x202E)
 ZERO_WIDTH_SPACE = chr(0x200B)

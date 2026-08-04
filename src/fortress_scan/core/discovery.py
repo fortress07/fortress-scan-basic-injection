@@ -70,13 +70,27 @@ class Discovery:
 
     def _load_ignore_files(self, directory: Path) -> IgnoreSet:
         ignore = self._explicit
-        names = list(IGNORE_FILENAMES)
+        names: List[str] = []
+        if self._config.respect_ignore_files:
+            names.extend(IGNORE_FILENAMES)
         if self._config.respect_vcs_ignore:
             names.extend(VCS_IGNORE_FILENAMES)
         for name in names:
             candidate = directory / name
             if candidate.is_file() and not safe_paths.is_link_like(candidate):
-                ignore = ignore.merged(IgnoreSet.from_file(candidate))
+                loaded = IgnoreSet.from_file(candidate)
+                if loaded.overflowed:
+                    self.errors.append(
+                        ScanError(
+                            path=safe_paths.relative_display(self._root, candidate),
+                            reason="ignore-file-too-complex",
+                            detail=(
+                                "vượt hạn mức mẫu nên toàn bộ quy tắc trong tệp này bị bỏ; "
+                                "không tệp nào bị ẩn khỏi lượt quét"
+                            ),
+                        )
+                    )
+                ignore = ignore.merged(loaded)
         return ignore
 
     def _walk_directory(
