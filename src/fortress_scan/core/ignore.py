@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import FrozenSet, List, Optional, Sequence, Tuple
 
+from ..security.text import split_lines
+
 _MAX_PATTERN_LENGTH = 512
 _MAX_PATTERNS = 1000
 _MAX_TOTAL_TOKENS = 10000
@@ -228,7 +230,11 @@ class IgnoreSet:
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return cls(())
-        return cls.from_lines(content.splitlines())
+        # Chỉ tách theo "\n" như git. str.splitlines() còn cắt ở \v, \f,
+        # \x1c-\x1e, \x85, U+2028, U+2029 -- một dòng comment như
+        # "# ghi chú\x0csecret/" sẽ bị tách làm đôi, biến phần đuôi thành
+        # pattern thật và lặng lẽ loại thư mục đó khỏi phạm vi quét.
+        return cls.from_lines(split_lines(content))
 
     def merged(self, other: "IgnoreSet") -> "IgnoreSet":
         return IgnoreSet(
