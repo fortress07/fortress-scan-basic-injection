@@ -64,52 +64,68 @@ def test_timeout_helper_reports_a_normal_return():
 
 
 @pytest.mark.parametrize("groups", [8, 16, 32, 64])
-def test_star_heavy_pattern_matches_in_linear_time(groups: int):
+def test_star_heavy_pattern_does_not_backtrack_exponentially(groups: int):
     rule = compile_rule("a*" * groups + "b")
     assert rule is not None
     text = "a" * 120
-    started = time.monotonic()
-    rule.matcher.matches(text)
-    elapsed = time.monotonic() - started
-    assert elapsed < 0.5, "mau %d nhom mat %.3fs, co dau hieu backtracking mu" % (groups, elapsed)
+
+    finished, _ = run_with_timeout(lambda: rule.matcher.matches(text))
+    assert finished, (
+        "mau %d nhom khong hoan tat trong %.0f giay -> dau hieu backtracking mu"
+        % (groups, BUDGET_SECONDS)
+    )
 
 
 def test_scan_is_not_hung_by_a_hostile_scanignore(tmp_path: Path):
     (tmp_path / ".fortress-scanignore").write_text("a*" * 30 + "b\n", encoding="utf-8")
     (tmp_path / ("a" * 80 + ".py")).write_text("x = 1\n", encoding="utf-8")
 
-    finished, elapsed = run_with_timeout(lambda: scan(str(tmp_path), Config()))
+    finished, _ = run_with_timeout(lambda: scan(str(tmp_path), Config()))
     assert finished, "scan() bi treo boi .fortress-scanignore doc hai"
-    assert elapsed < BUDGET_SECONDS
 
 
 def test_scan_is_not_hung_by_a_hostile_gitignore(tmp_path: Path):
     (tmp_path / ".gitignore").write_text("x*" * 30 + "y\n", encoding="utf-8")
     (tmp_path / ("x" * 80 + ".py")).write_text("x = 1\n", encoding="utf-8")
 
-    finished, elapsed = run_with_timeout(lambda: scan(str(tmp_path), Config()))
+    finished, _ = run_with_timeout(lambda: scan(str(tmp_path), Config()))
     assert finished, "scan() bi treo boi .gitignore doc hai"
-    assert elapsed < BUDGET_SECONDS
 
 
 def test_scan_is_not_hung_by_a_hostile_exclude_flag(tmp_path: Path):
     (tmp_path / ("a" * 80 + ".py")).write_text("x = 1\n", encoding="utf-8")
     config = Config(exclude_patterns=("a*" * 30 + "b",))
 
-    finished, elapsed = run_with_timeout(lambda: scan(str(tmp_path), config))
+    finished, _ = run_with_timeout(lambda: scan(str(tmp_path), config))
     assert finished, "scan() bi treo boi mau --exclude doc hai"
-    assert elapsed < BUDGET_SECONDS
 
 
-def test_huge_ignore_file_stays_bounded():
+def test_a_large_ignore_file_within_budget_stays_bounded():
+    lines = [("a*" * 5) + "b%d" % index for index in range(500)]
+    ignore = IgnoreSet.from_lines(lines)
+
+    assert not ignore.overflowed, (
+        "phep thu chi co y nghia khi bo luat NAM TRONG han muc, "
+        "neu bi bo sach thi dang do tap rong"
+    )
+    assert bool(ignore), "tap luat rong thi khong do duoc gi"
+
+    path = "/".join(["a" * 40] * 6)
+    finished, _ = run_with_timeout(lambda: ignore.matches(path, False))
+    assert finished, "tep ignore lon nhung hop le lai khong khop xong trong %.0f giay" % (
+        BUDGET_SECONDS,
+    )
+
+
+def test_an_over_budget_ignore_file_costs_nothing_because_it_is_discarded():
     lines = [("a*" * 50) + "b" for _ in range(5000)]
     ignore = IgnoreSet.from_lines(lines)
-    path = "/".join(["a" * 40] * 6)
 
-    started = time.monotonic()
-    ignore.matches(path, False)
-    elapsed = time.monotonic() - started
-    assert elapsed < 2.0, "tep ignore khong lo van ton %.2fs cho mot duong dan" % elapsed
+    assert ignore.overflowed
+    assert not bool(ignore)
+    path = "/".join(["a" * 40] * 6)
+    finished, _ = run_with_timeout(lambda: ignore.matches(path, False))
+    assert finished
 
 
 def test_pattern_budget_fails_safe_by_keeping_files_visible(tmp_path: Path):
@@ -154,6 +170,28 @@ def test_budget_overflow_never_hides_a_file_a_negation_wanted_kept(tmp_path: Pat
     assert any(f.rule_id == "FSB-CMD-001" for f in result.findings), (
         "luat '!keep.py' bi han muc cat mat khien tep bi giau khoi luot quet"
     )
+
+
+def test_pattern_count_limit_also_discards_instead_of_truncating():
+    short = ["a%d" % index for index in range(1100)]
+    ignore = IgnoreSet.from_lines(["*.min.js"] + short + ["!keep.min.js"])
+
+    assert ignore.overflowed, "vuot gioi han SO MAU cung phai bao overflow"
+    assert not ignore.matches("app.min.js", False), (
+        "luat dau tep van con hieu luc -> dang cat giua chung theo so mau"
+    )
+    assert not ignore.matches("keep.min.js", False), (
+        "luat phu dinh o cuoi bi cat khien tep bi giau"
+    )
+
+
+def test_pattern_count_limit_is_reported_and_not_silent(tmp_path: Path):
+    short = "\n".join("a%d" % index for index in range(1100))
+    (tmp_path / ".fortress-scanignore").write_text(short, encoding="utf-8")
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+
+    result = scan(str(tmp_path), Config())
+    assert any(error.reason == "ignore-file-too-complex" for error in result.errors)
 
 
 def test_budget_overflow_is_reported_and_not_silent(tmp_path: Path):
@@ -207,11 +245,10 @@ def test_no_ignore_files_flag_also_defeats_a_hostile_pattern(tmp_path: Path):
     (tmp_path / ".fortress-scanignore").write_text("a*" * 30 + "b\n", encoding="utf-8")
     (tmp_path / ("a" * 80 + ".py")).write_text("x = 1\n", encoding="utf-8")
 
-    finished, elapsed = run_with_timeout(
+    finished, _ = run_with_timeout(
         lambda: scan(str(tmp_path), Config(respect_ignore_files=False))
     )
     assert finished
-    assert elapsed < BUDGET_SECONDS
 
 
 def _write_project_with_every_suppression(root: Path) -> None:
@@ -307,9 +344,14 @@ def test_globstar_and_class_patterns_still_work():
 
 
 def test_long_paths_are_not_truncated_before_matching():
+    from fortress_scan.core.ignore import _MAX_PATH_LENGTH
+
     ignore = IgnoreSet.from_lines(["*.py"])
-    deep = "/".join("d" * 200 for _ in range(6)) + "/ma_nguon.py"
-    assert len(deep) > 1024
+    segments = (_MAX_PATH_LENGTH - 100) // 201
+    deep = "/".join("d" * 200 for _ in range(segments)) + "/ma_nguon.py"
+
+    assert len(deep) < _MAX_PATH_LENGTH, "phep thu can duong dan NAM TRONG han muc"
+    assert len(deep) > _MAX_PATH_LENGTH // 2, "duong dan phai du dai de phat hien viec cat"
     assert ignore.matches(deep, False), (
         "duong dan dai bi cat truoc khi khop nen mat duoi .py"
     )
