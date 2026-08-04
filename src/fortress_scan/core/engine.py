@@ -93,7 +93,6 @@ def scan_source(
         relative_path=relative_path,
         language=language,
         source=source,
-        lines=tuple(source.splitlines()),
         config=settings,
     )
     findings, _ = _analyze_unit(unit, settings)
@@ -144,7 +143,6 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
         relative_path=discovered.relative,
         language=discovered.language,
         source=source,
-        lines=tuple(source.splitlines()),
         config=config,
         degraded_encoding=degraded,
     )

@@ -12,6 +12,7 @@ from fortress_scan.languages import JAVA, JAVASCRIPT, MANIFEST, PYTHON, SHELL
 BIDI_OVERRIDE = chr(0x202E)
 ZERO_WIDTH_SPACE = chr(0x200B)
 CYRILLIC_A = chr(0x0430)
+FORM_FEED = chr(0x0C)
 
 
 def rule_ids(language: str, source: str):
@@ -131,6 +132,10 @@ TRIGGERS: Dict[str, Tuple[str, str]] = {
         PYTHON,
         "m" + CYRILLIC_A + "tkhau = 'admin'\n",
     ),
+    "FSB-UNI-004": (
+        PYTHON,
+        "duyet = False\n# ghi chu%sduyet = True\n" % FORM_FEED,
+    ),
     "FSB-XML-001": (
         PYTHON,
         "from lxml import etree\nparser = etree.XMLParser(resolve_entities=True)\n",
@@ -227,6 +232,7 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
     "FSB-UNI-001": (PYTHON, "duyet = False\n# return duyet\n"),
     "FSB-UNI-002": (PYTHON, "def kiem_tra(u):\n    return True\n"),
     "FSB-UNI-003": (PYTHON, "matkhau = 'admin'\n"),
+    "FSB-UNI-004": (PYTHON, "duyet = False\n# ghi chu\tduyet = True\n"),
     "FSB-XML-001": (
         PYTHON,
         "from lxml import etree\nparser = etree.XMLParser(resolve_entities=False)\n",

@@ -475,6 +475,30 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         ),
     ),
     RuleSpec(
+        id="FSB-UNI-004",
+        title="Ký tự điều khiển khiến các công cụ chia dòng khác nhau",
+        category=Category.UNICODE,
+        severity=Severity.MEDIUM,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-436", "CWE-94"),
+        owasp=_OWASP_INTEGRITY,
+        description=(
+            "Tệp chứa ký tự điều khiển C0/C1 hoặc dấu tách dòng Unicode. Mỗi công cụ hiểu "
+            "chúng một kiểu: str.splitlines() của Python, nhiều trình soạn thảo và giao diện "
+            "review coi \\v, \\f, \\x1c-\\x1e, NEL, U+2028, U+2029 là xuống dòng, còn trình "
+            "biên dịch thì không. Hệ quả là số dòng mà người review nhìn thấy lệch khỏi số "
+            "dòng thực sự chạy, nên một dòng vô hại có thể bị trưng ra thay cho dòng nguy "
+            "hiểm. Ký tự ESC còn mang được chuỗi điều khiển terminal để viết đè nội dung in "
+            "ra console."
+        ),
+        remediation=(
+            "Gỡ bỏ các ký tự này khỏi mã nguồn. Nếu cần chúng trong dữ liệu, hãy viết dạng "
+            "escape (\"\\\\x0c\") thay vì nhúng byte thô, và thêm một bước kiểm tra trong CI "
+            "để chặn ký tự điều khiển lọt vào tệp mã nguồn."
+        ),
+        references=("https://cwe.mitre.org/data/definitions/436.html",),
+    ),
+    RuleSpec(
         id="FSB-SUP-001",
         title="Script vòng đời của package tải mã từ xa về chạy",
         category=Category.SUPPLY_CHAIN,
