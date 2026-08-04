@@ -29,7 +29,7 @@ app/routes.py
           dòng 42  chạy tới cursor.execute()
 ```
 
-**26 rule, phủ 12 họ injection:** SQL · NoSQL · LDAP · XPath · OS command · code injection
+**27 rule, phủ 12 họ injection:** SQL · NoSQL · LDAP · XPath · OS command · code injection
 (`eval`/`exec`) · template (SSTI) · expression language · XSS · XXE · file inclusion · reflection.
 Kèm 3 nhóm liên quan: giải tuần tự không an toàn, Trojan Source / ký tự ẩn, và script cài đặt tải mã
 từ xa về chạy.
@@ -38,6 +38,60 @@ từ xa về chạy.
 `package.json`.
 
 Xem đầy đủ: `python -m fortress_scan --list-rules`
+
+### Quét được những lỗ hổng nào — danh sách đã kiểm chứng
+
+Mỗi rule dưới đây đều có **mẫu mã nguồn thật làm nó kêu** và (với đa số) **một mẫu an toàn tương ứng
+để chắc nó không kêu bừa**, chạy tự động trong `tests/test_rule_coverage.py`. Có test bắt buộc mọi
+rule đăng ký phải có mẫu kích hoạt, nên bảng này không thể lệch khỏi code.
+
+| Họ lỗ hổng | Rule | Ví dụ bắt được |
+| --- | --- | --- |
+| OS command injection | `FSB-CMD-001` crit · `-002` high · `-003` med · `-004` med | `os.system("ping " + input_ng)`, chương trình do input quyết định, biến shell không đặt nháy |
+| SQL injection | `FSB-SQL-001` crit · `-002` med | `cursor.execute(f"... WHERE n='{ten}'")` |
+| Code injection | `FSB-EXEC-001` crit · `-002` med | `eval(payload)`, `exec(payload)` |
+| Template injection (SSTI) | `FSB-TMPL-001` crit · `-002` med | `jinja_env.from_string(tpl_nguoi_dung)` |
+| Dynamic import / file inclusion | `FSB-IMPORT-001` crit · `-002` low | `importlib.import_module(ten_ng)`, `include($_GET['page'])` |
+| Giải tuần tự không an toàn | `FSB-DESER-001` crit · `-002` med | `pickle.loads(body)`, `yaml.load(...)` không `SafeLoader` |
+| Expression language | `FSB-EL-001` crit | SpEL `parser.parseExpression(q).getValue()` |
+| NoSQL injection | `FSB-NOSQL-001` high | `{"$where": gia_tri_ng}` |
+| LDAP injection | `FSB-LDAP-001` high | `conn.search_s(base, scope, filter_ng)` |
+| XPath injection | `FSB-XPATH-001` high | `tree.xpath("//user[@n='" + ten + "']")` |
+| Reflection | `FSB-REFL-001` high | `getattr(os, ten_ham_tu_input)` |
+| XSS / xuất HTML thô | `FSB-XSS-001` high | `el.innerHTML = req.body.bio` |
+| XXE | `FSB-XML-001` high | `XMLParser(resolve_entities=True)` |
+| Trojan Source / ký tự ẩn | `FSB-UNI-001` high · `-002` med · `-003` low · `-004` med | ký tự đảo chiều bidi, ký tự rộng bằng không, token trộn bảng chữ cái |
+| Supply chain | `FSB-SUP-001` crit · `-002` low | `package.json` có `postinstall` tải script từ xa về chạy |
+
+### Quét được những dự án nào — đo bằng mã nguồn thật
+
+Bảng này là **kết quả chạy thật** trên mã mẫu của từng ngôn ngữ, không phải danh sách mong muốn.
+Python có parser AST + phân tích luồng dữ liệu nên sâu hơn hẳn; các ngôn ngữ còn lại phân tích theo
+token nên chỉ bắt được dạng "nguồn → biến → sink" trong cùng một hàm.
+
+| Dự án của bạn viết bằng | Bắt được (đã đo) |
+| --- | --- |
+| **Python** — Flask, Django, FastAPI, CLI, script | 23/27 rule: command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode |
+| **JavaScript** — Express, Node | command, code (`eval`), SQL, dynamic `require`, XSS |
+| **PHP** — `$_GET`/`$_POST`/`$_COOKIE` | command, code (`eval`), SQL, `include`, `unserialize` |
+| **Ruby** — Rails-style `params` | command, code (`eval`), template (ERB), `Marshal.load` |
+| **Java/JVM** — Servlet `getParameter` | command, SQL, expression language (SpEL) |
+| **Go** — `net/http` + `database/sql` | command, SQL, template |
+| **C#** — ASP.NET `Request.Query` | SQL |
+| **Shell** — bash/sh | `eval`, biến không đặt trong nháy kép |
+| **`package.json`** | script vòng đời tải mã từ xa về chạy |
+
+**Nguồn dữ liệu Python được nhận ra** — từng cái dưới đây đã chạy thử và đều ra **critical**:
+`flask.request` với `.args` / `.form` / `.cookies` / `.headers` / `.get_json()` / `.get_data()`,
+`request.GET` và `request.POST` của Django, tham số handler của FastAPI, `input()`,
+`sys.stdin.readline()`, phản hồi của `requests` và `urllib.request.urlopen()`.
+
+Biến môi trường (`os.getenv`) và tham số dòng lệnh (`argparse`) **mặc định tắt** vì hay báo nhầm —
+bật bằng `--include-env-sources` thì chúng cũng lên critical.
+
+Ngược lại, `socket.recv()` **đã thử và không nhận ra** (chỉ còn medium): công cụ chỉ khớp đúng tên
+`socket.socket.recv`, mà code thật hầu như luôn gọi qua biến. Dữ liệu đọc thẳng từ socket xin tự
+kiểm tra bằng tay.
 
 ### Chỉ đọc và báo cáo — không làm gì khác
 
@@ -137,6 +191,9 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
   trị "độ tin cậy" trong báo cáo phản ánh đúng điều đó.
 - **Không theo được dữ liệu lưu vào thuộc tính đối tượng**, và không phát hiện **injection bậc hai**
   (dữ liệu bẩn ghi vào CSDL rồi đọc ra dùng lại).
+- **TypeScript có chú thích kiểu ngay chỗ khai báo thì mất dấu vết dữ liệu.** Đã đo:
+  `const dir = req.query.dir` ra **critical**, nhưng `const dir: string = req.query.dir` chỉ còn
+  **medium**. Viết TypeScript mà khai báo có kiểu thì hãy đọc cả các cảnh báo mức medium.
 - **Chưa hỗ trợ:** CRLF/header injection, log injection, path traversal, SSRF, open redirect,
   prototype pollution, ReDoS, lỗi logic nghiệp vụ.
 - Sẽ có **báo nhầm** (false positive) và **bỏ sót** (false negative) — phân tích tĩnh vốn không đầy
