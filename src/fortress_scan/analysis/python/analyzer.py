@@ -12,17 +12,22 @@ from . import specs
 from .imports import ImportResolver, attribute_parts, dotted_name
 from .taint import (
     CONSTANT,
+    MAX_ENTRIES,
     UNKNOWN,
+    CallableRef,
     Environment,
     Taint,
     Value,
     combine,
     copy_environment,
     environments_equal,
+    limit_callables,
     literal,
     merge_environments,
     merge_taint,
     merge_values,
+    ordered_callables,
+    union_callables,
 )
 
 SUMMARY_MODE = "summary"
@@ -98,6 +103,32 @@ class ModuleAnalysis:
         self.functions: Dict[str, FunctionInfo] = {}
         self.functions_by_name: Dict[str, List[FunctionInfo]] = {}
         self.summaries: Dict[str, Summary] = {}
+        self._name_values: Dict[str, Value] = {}
+        self._attribute_refs: Dict[Tuple[str, str], FrozenSet[CallableRef]] = {}
+
+    def name_value(self, qualname: str) -> Value:
+        """Bare names repeat constantly; hand out one shared immutable value."""
+        value = self._name_values.get(qualname)
+        if value is None:
+            value = Value(callables=frozenset({CallableRef(qualname=qualname)}))
+            self._name_values[qualname] = value
+        return value
+
+    def attribute_refs(self, dotted: str, attribute: str) -> FrozenSet[CallableRef]:
+        cached = self._attribute_refs.get((dotted, attribute))
+        if cached is None:
+            receiver = dotted[: len(dotted) - len(attribute) - 1]
+            cached = frozenset(
+                {
+                    CallableRef(
+                        qualname=self.imports.resolve(dotted),
+                        attribute=attribute,
+                        receiver=receiver or None,
+                    )
+                }
+            )
+            self._attribute_refs[(dotted, attribute)] = cached
+        return cached
 
     def run(self, tree: ast.Module) -> List[Finding]:
         self.imports.collect(tree)
@@ -475,6 +506,7 @@ class Evaluator:
                 elements=elements,
                 is_sequence=True,
                 sanitized=aggregate.sanitized,
+                callables=union_callables(elements),
             )
         if isinstance(node, ast.Dict):
             return self._eval_dict(node, env)
@@ -510,7 +542,7 @@ class Evaluator:
             return self._tainted(node, source)
         if node.id.isupper() and len(node.id) > 1:
             return CONSTANT
-        return UNKNOWN
+        return self.module.name_value(resolved)
 
     def _eval_attribute(self, node: ast.Attribute, env: Environment) -> Value:
         dotted = dotted_name(node)
@@ -525,11 +557,15 @@ class Evaluator:
             if request_source is not None:
                 return self._tainted(node, request_source)
         base = self._eval(node.value, env)
+        callables: FrozenSet[CallableRef] = frozenset()
+        if dotted is not None:
+            callables = self.module.attribute_refs(dotted, node.attr)
         return Value(
             taint=base.taint,
             constant=base.constant,
             text_parts=base.text_parts,
             sanitized=base.sanitized,
+            callables=callables,
         )
 
     def _eval_subscript(self, node: ast.Subscript, env: Environment) -> Value:
@@ -540,16 +576,19 @@ class Evaluator:
             constant=base.constant,
             text_parts=base.text_parts,
             sanitized=base.sanitized,
+            callables=_indexed_callables(base, node.slice),
         )
 
     def _eval_dict(self, node: ast.Dict, env: Environment) -> Value:
         values: List[Value] = []
+        entries: List[Tuple[str, FrozenSet[CallableRef]]] = []
         for key, item in zip(node.keys, node.values):
             key_value = self._eval(key, env) if key is not None else CONSTANT
             item_value = self._eval(item, env)
             values.append(key_value)
             values.append(item_value)
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                entries.append((key.value, item_value.callables))
                 if key.value in specs.NOSQL_OPERATOR_KEYS and item_value.taint is not None:
                     self._flag(
                         rule_id="FSB-NOSQL-001",
@@ -562,7 +601,13 @@ class Evaluator:
                     )
         aggregate = combine(*values) if values else CONSTANT
         return Value(
-            taint=aggregate.taint, constant=aggregate.constant, sanitized=aggregate.sanitized
+            taint=aggregate.taint,
+            constant=aggregate.constant,
+            sanitized=aggregate.sanitized,
+            callables=union_callables(values),
+            # A partial key map would read as "key absent" and hide a sink, so
+            # an oversized literal keeps only the union.
+            entries=tuple(entries) if len(entries) <= MAX_ENTRIES else (),
         )
 
     def _eval_comprehension(
@@ -601,20 +646,29 @@ class Evaluator:
                 self._eval(keyword.value, env)
 
         receiver = UNKNOWN
+        callee = UNKNOWN
         if isinstance(node.func, ast.Attribute):
             receiver = self._eval(node.func.value, env)
+            dotted = dotted_name(node.func)
+            if dotted is not None:
+                callee = env.get(dotted, UNKNOWN)
+        elif isinstance(node.func, ast.Name):
+            callee = env.get(node.func.id, UNKNOWN)
         elif isinstance(node.func, (ast.Call, ast.Subscript, ast.IfExp)):
-            self._eval(node.func, env)
+            callee = self._eval(node.func, env)
 
-        self._check_sink(node, qualname, argument_values, keyword_values, env)
+        targets = _call_targets(node, qualname, callee)
+        effective = targets[0].qualname if targets else None
 
-        if qualname is not None:
-            if qualname in specs.TRUSTED_PRODUCERS:
+        self._check_sink(node, targets, argument_values, keyword_values)
+
+        if effective is not None:
+            if effective in specs.TRUSTED_PRODUCERS:
                 return Value(constant=False, sanitized=True)
-            cleared = specs.SANITIZERS.get(qualname)
+            cleared = specs.SANITIZERS.get(effective)
             if cleared is not None:
                 return self._sanitized(argument_values, keyword_values, cleared)
-            weakened = specs.WEAK_SANITIZERS.get(qualname)
+            weakened = specs.WEAK_SANITIZERS.get(effective)
             if weakened is not None:
                 aggregate = combine(*argument_values) if argument_values else UNKNOWN
                 if aggregate.taint is None:
@@ -622,7 +676,7 @@ class Evaluator:
                 return Value(
                     taint=aggregate.taint.weakened_for(weakened), constant=False, sanitized=True
                 )
-            source = specs.SOURCE_CALLS.get(qualname)
+            source = specs.SOURCE_CALLS.get(effective)
             if source is not None and self._source_enabled(source):
                 return self._tainted(node, source)
 
@@ -634,11 +688,11 @@ class Evaluator:
             if handler_source is not None and _is_self_reference(node.func.value):
                 return self._tainted(node, handler_source)
 
-        local = self.module.lookup_function(qualname)
+        local = self.module.lookup_function(effective)
         if local is not None and local.node is not getattr(self.function, "node", None):
             return self._apply_summary(local, node, argument_values, keyword_values)
 
-        if qualname is not None and qualname in specs.PROPAGATING_CALLS:
+        if effective is not None and effective in specs.PROPAGATING_CALLS:
             return combine(*argument_values) if argument_values else UNKNOWN
 
         if isinstance(node.func, ast.Attribute) and node.func.attr in specs.PROPAGATING_METHODS:
@@ -659,9 +713,19 @@ class Evaluator:
         for item in inputs:
             aggregate_taint = merge_taint(aggregate_taint, item.taint)
             sanitized = sanitized or item.sanitized
+        # Naming a callable must not disturb the data the call carries, so the
+        # reflected name rides along on the value the fallthrough already built.
+        produced = (
+            _reflected_callables(node, self.imports) if effective == "getattr" else frozenset()
+        )
         if aggregate_taint is None:
-            return Value(constant=False, sanitized=sanitized)
-        return Value(taint=aggregate_taint.downgraded(), constant=False, sanitized=sanitized)
+            return Value(constant=False, sanitized=sanitized, callables=produced)
+        return Value(
+            taint=aggregate_taint.downgraded(),
+            constant=False,
+            sanitized=sanitized,
+            callables=produced,
+        )
 
     def _sanitized(
         self,
@@ -772,18 +836,27 @@ class Evaluator:
     def _check_sink(
         self,
         node: ast.Call,
-        qualname: Optional[str],
+        targets: Sequence[CallableRef],
         argument_values: Sequence[Value],
         keyword_values: Dict[str, Value],
-        env: Environment,
     ) -> None:
-        if qualname and qualname in self.module.functions:
+        for target in targets:
+            self._check_sink_target(node, target, argument_values, keyword_values)
+
+    def _check_sink_target(
+        self,
+        node: ast.Call,
+        target: CallableRef,
+        argument_values: Sequence[Value],
+        keyword_values: Dict[str, Value],
+    ) -> None:
+        if target.qualname in self.module.functions:
             return
-        spec = specs.SINKS.get(qualname) if qualname else None
-        if spec is None and isinstance(node.func, ast.Attribute):
-            candidate = specs.METHOD_SINKS.get(node.func.attr)
+        spec = specs.SINKS.get(target.qualname)
+        if spec is None and target.attribute is not None:
+            candidate = specs.METHOD_SINKS.get(target.attribute)
             if candidate is not None and self._method_sink_applies(
-                candidate, node, argument_values
+                candidate, target, argument_values
             ):
                 spec = candidate
         if spec is None:
@@ -927,13 +1000,11 @@ class Evaluator:
         )
 
     def _method_sink_applies(
-        self, spec: specs.SinkSpec, node: ast.Call, argument_values: Sequence[Value]
+        self, spec: specs.SinkSpec, target: CallableRef, argument_values: Sequence[Value]
     ) -> bool:
-        if not isinstance(node.func, ast.Attribute):
-            return False
         if spec.category is not Category.SQL:
             return True
-        if _receiver_matches(node.func.value, specs.SQL_METHOD_RECEIVER_HINTS):
+        if _receiver_matches(target.receiver, specs.SQL_METHOD_RECEIVER_HINTS):
             return True
         for value in argument_values[:1]:
             if specs.SQL_STATEMENT.search(value.text):
@@ -1115,16 +1186,82 @@ def _keyword_is_false(node: ast.Call, name: str) -> bool:
     return True
 
 
-def _receiver_matches(node: ast.AST, hints: FrozenSet[str]) -> bool:
-    parts = attribute_parts(node)
-    if not parts and isinstance(node, ast.Call):
-        parts = attribute_parts(node.func)
-    for part in parts:
+def _receiver_matches(receiver: Optional[str], hints: FrozenSet[str]) -> bool:
+    if not receiver:
+        return False
+    for part in receiver.split("."):
         lowered = part.lower()
         for hint in hints:
             if hint in lowered:
                 return True
     return False
+
+
+def _call_targets(
+    node: ast.Call, qualname: Optional[str], callee: Value
+) -> Tuple[CallableRef, ...]:
+    """Which callables this call may reach.
+
+    A value that carries a tracked callable wins over the syntactic name: it
+    means the name at the call site is a local alias rather than the API being
+    called. Where nothing is tracked this reproduces the plain syntactic match.
+    """
+    if callee.callables:
+        return ordered_callables(callee)
+    if not isinstance(node.func, (ast.Name, ast.Attribute)) or qualname is None:
+        return ()
+    if isinstance(node.func, ast.Attribute):
+        return (
+            CallableRef(
+                qualname=qualname,
+                attribute=node.func.attr,
+                receiver=dotted_name(node.func.value),
+            ),
+        )
+    return (CallableRef(qualname=qualname),)
+
+
+def _indexed_callables(base: Value, index: ast.expr) -> FrozenSet[CallableRef]:
+    """Callables reachable through ``container[index]``.
+
+    A constant index picks the exact element, so an unrelated entry in a
+    dispatch table is not blamed. Anything else falls back to every callable the
+    container holds, because the index cannot be pinned down.
+    """
+    if isinstance(index, ast.Constant):
+        key = index.value
+        if isinstance(key, int) and not isinstance(key, bool) and base.elements:
+            if -len(base.elements) <= key < len(base.elements):
+                return base.elements[key].callables
+            return frozenset()
+        if isinstance(key, str) and base.entries:
+            matched: FrozenSet[CallableRef] = frozenset()
+            for name, refs in base.entries:
+                if name == key:
+                    matched = matched | refs
+            return limit_callables(matched)
+    return base.callables
+
+
+def _reflected_callables(node: ast.Call, imports: ImportResolver) -> FrozenSet[CallableRef]:
+    """``getattr(obj, "name")`` names a callable just as ``obj.name`` does."""
+    if len(node.args) < 2:
+        return frozenset()
+    attribute = node.args[1]
+    if not (isinstance(attribute, ast.Constant) and isinstance(attribute.value, str)):
+        return frozenset()
+    receiver = dotted_name(node.args[0])
+    if receiver is None:
+        return frozenset()
+    return frozenset(
+        {
+            CallableRef(
+                qualname=imports.resolve("%s.%s" % (receiver, attribute.value)),
+                attribute=attribute.value,
+                receiver=receiver,
+            )
+        }
+    )
 
 
 def _terminates(statements: Sequence[ast.stmt]) -> bool:

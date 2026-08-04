@@ -293,6 +293,253 @@ class TestEvasionAttempts:
         assert any(f.rule_id == "FSB-CMD-001" for f in exposed.findings)
 
 
+class TestSinkReachedThroughAnAlias:
+    """A sink stays a sink when the call goes through a name that holds it.
+
+    Sink matching is by API name, so storing the callable in a variable, a
+    dispatch table or a getattr() used to make the call unrecognisable and the
+    finding vanished silently.
+    """
+
+    def test_sink_assigned_to_a_local_variable(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    func = os.system\n"
+            "    func(cmd)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sink_held_in_a_dispatch_table(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    handlers = {'run': os.system}\n"
+            "    handlers['run'](cmd)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sink_held_in_a_list(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    ops = [os.system]\n"
+            "    ops[0](cmd)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sink_reached_by_getattr_with_a_constant_name(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    getattr(os, 'system')(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_dispatch_table_indexed_by_untrusted_input(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    handlers = {'run': os.system, 'show': print}\n"
+            "    handlers[request.args.get('k')](request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_dispatch_table_too_large_to_map_falls_back_to_the_union(self):
+        """The per-key map is bounded; dropping it must lose precision, not the
+        finding, or a padded table would be an evasion."""
+        table = ", ".join("'k%d': os.system" % index for index in range(400))
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    handlers = {%s}\n"
+            "    handlers['k399'](cmd)\n" % table
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_method_sink_assigned_to_a_local_variable(self):
+        source = (
+            "from flask import request\n"
+            "def handler(cursor):\n"
+            "    name = request.args.get('n')\n"
+            "    run = cursor.execute\n"
+            "    run(f\"SELECT * FROM users WHERE name = '{name}'\")\n"
+        )
+        assert "FSB-SQL-001" in rule_ids(source)
+
+    def test_builtin_sink_assigned_to_a_local_variable(self):
+        source = (
+            "from flask import request\n"
+            "def handler():\n"
+            "    run = eval\n"
+            "    run(request.args.get('e'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_template_sink_assigned_to_a_local_variable(self):
+        source = (
+            "from flask import request\n"
+            "def handler(env):\n"
+            "    render = env.from_string\n"
+            "    render(request.args.get('t'))\n"
+        )
+        assert "FSB-TMPL-001" in rule_ids(source)
+
+    def test_alias_of_a_local_wrapper_keeps_the_full_trace(self):
+        """Aliasing a wrapper used to downgrade critical to medium and drop the
+        data path, which reads as a code smell rather than an injection."""
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def run_cmd(c):\n"
+            "    os.system(c)\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    f = run_cmd\n"
+            "    f(cmd)\n"
+        )
+        findings = scan_source(source, PYTHON, "sample.py", Config())
+        command = [f for f in findings if f.rule_id == "FSB-CMD-001"]
+        assert command, "aliased wrapper must still report the injection"
+        assert any(step.label.startswith("tham số truy vấn HTTP") for step in command[0].trace)
+
+    def test_alias_through_a_branch_reports_both_targets(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler(flag):\n"
+            "    cmd = request.args.get('c')\n"
+            "    func = os.system if flag else eval\n"
+            "    func(cmd)\n"
+        )
+        ids = rule_ids(source)
+        assert "FSB-CMD-001" in ids
+        assert "FSB-EXEC-001" in ids
+
+
+class TestAliasTrackingStaysPrecise:
+    """Alias resolution must not blame a callable the call cannot reach."""
+
+    def test_constant_key_picks_only_that_dispatch_entry(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    handlers = {'safe': print, 'run': os.system}\n"
+            "    handlers['safe'](request.args.get('v'))\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_constant_index_picks_only_that_list_element(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    ops = [print, os.system]\n"
+            "    ops[0](request.args.get('v'))\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_a_sink_that_is_never_called_is_not_a_finding(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    runner = os.system\n"
+            "    return str(runner) + request.args.get('v')\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_alias_of_a_sanitizer_still_sanitizes(self):
+        source = (
+            "import shlex\n"
+            "import subprocess\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    quote = shlex.quote\n"
+            "    run = subprocess.run\n"
+            "    run('echo ' + quote(request.args.get('v')), shell=True)\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_alias_matches_the_direct_call_exactly(self):
+        """The alias path must add no finding the direct call would not make."""
+        direct = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    os.system('echo ' + request.args.get('v'))\n"
+        )
+        aliased = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    run = os.system\n"
+            "    run('echo ' + request.args.get('v'))\n"
+        )
+        assert sorted(rule_ids(direct)) == sorted(rule_ids(aliased))
+
+    def test_getattr_still_carries_the_taint_of_its_receiver(self):
+        """Naming a callable must not consume the data the call returns, or
+        reflection would launder taint instead of tracking it."""
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    obj = request.args.get('o')\n"
+            "    value = getattr(obj, 'name')\n"
+            "    os.system('echo ' + value)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_getattr_still_carries_the_taint_of_its_default(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    fallback = request.args.get('d')\n"
+            "    value = getattr(object(), 'missing', fallback)\n"
+            "    os.system('echo ' + value)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_merging_an_unmappable_table_keeps_the_finding(self):
+        """One branch too large to map makes the other branch's key map
+        non-authoritative; keeping it would read as 'key absent'."""
+        table = ", ".join("'b%d': os.system" % index for index in range(400))
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler(flag):\n"
+            "    cmd = request.args.get('c')\n"
+            "    if flag:\n"
+            "        table = {'small': os.popen}\n"
+            "    else:\n"
+            "        table = {%s}\n"
+            "    table['b399'](cmd)\n" % table
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_a_plain_data_variable_is_not_treated_as_a_callable(self):
+        source = (
+            "from flask import request\n"
+            "def handler():\n"
+            "    system = request.args.get('v')\n"
+            "    return system\n"
+        )
+        assert rule_ids(source) == []
+
+
 class TestDocumentedGaps:
     def test_gap_taint_across_files_is_not_tracked(self, tmp_path: Path):
         (tmp_path / "helpers.py").write_text(

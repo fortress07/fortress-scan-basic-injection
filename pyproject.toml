@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fortress-scan-basic-injection"
-version = "0.1.0"
+version = "0.2.0"
 description = "Công cụ phân tích tĩnh phát hiện sớm các lỗ hổng injection trong mã nguồn."
 readme = "README.md"
 requires-python = ">=3.9"

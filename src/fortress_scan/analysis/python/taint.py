@@ -1,12 +1,78 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, FrozenSet, Iterable, Optional, Tuple
 
 from ...core.model import Category, Confidence, TraceStep
 
 MAX_TRACE_STEPS = 12
 MAX_TEXT_PARTS = 24
+MAX_CALLABLE_REFS = 8
+MAX_ENTRIES = 32
+
+
+@dataclass(frozen=True)
+class CallableRef:
+    """Which function a value refers to.
+
+    Sink matching is name based, so a callable that is stored in a variable, put
+    in a container or produced by ``getattr`` would otherwise lose the name it
+    is matched by. This travels with the value and keeps it recognisable.
+    """
+
+    qualname: str
+    attribute: Optional[str] = None
+    receiver: Optional[str] = None
+
+    def sort_key(self) -> Tuple[str, str, str]:
+        return (self.qualname, self.attribute or "", self.receiver or "")
+
+
+def limit_callables(refs: FrozenSet[CallableRef]) -> FrozenSet[CallableRef]:
+    if len(refs) <= MAX_CALLABLE_REFS:
+        return refs
+    return frozenset(sorted(refs, key=CallableRef.sort_key)[:MAX_CALLABLE_REFS])
+
+
+def merge_callables(
+    left: FrozenSet[CallableRef], right: FrozenSet[CallableRef]
+) -> FrozenSet[CallableRef]:
+    if not left:
+        return right
+    if not right:
+        return left
+    return limit_callables(left | right)
+
+
+def maps_its_callables(value: "Value") -> bool:
+    """Whether a key map accounts for every callable this value can reach."""
+    return bool(value.entries) or not value.callables
+
+
+def merge_entries(left: "Value", right: "Value") -> Tuple[Tuple[str, FrozenSet[CallableRef]], ...]:
+    """Merge two key maps, keeping one only while it stays authoritative.
+
+    A missing key reads as "no callable here", so a map that does not cover both
+    sides would hide a sink. In that case drop it and let the caller fall back
+    to the union.
+    """
+    if not maps_its_callables(left) or not maps_its_callables(right):
+        return ()
+    combined = left.entries + right.entries
+    return combined if len(combined) <= MAX_ENTRIES else ()
+
+
+def union_callables(values: Iterable["Value"]) -> FrozenSet[CallableRef]:
+    refs: FrozenSet[CallableRef] = frozenset()
+    for value in values:
+        if value.callables:
+            refs = refs | value.callables
+    return limit_callables(refs)
+
+
+def ordered_callables(value: "Value") -> Tuple[CallableRef, ...]:
+    """Deterministic order, so findings do not depend on set iteration order."""
+    return tuple(sorted(value.callables, key=CallableRef.sort_key))
 
 
 @dataclass(frozen=True)
@@ -81,6 +147,8 @@ class Value:
     elements: Tuple["Value", ...] = ()
     is_sequence: bool = False
     sanitized: bool = False
+    callables: FrozenSet[CallableRef] = frozenset()
+    entries: Tuple[Tuple[str, FrozenSet[CallableRef]], ...] = ()
 
     @property
     def text(self) -> str:
@@ -130,6 +198,8 @@ def merge_values(left: Value, right: Value) -> Value:
         elements=(),
         is_sequence=left.is_sequence and right.is_sequence,
         sanitized=left.sanitized or right.sanitized,
+        callables=merge_callables(left.callables, right.callables),
+        entries=merge_entries(left, right),
     )
 
 
@@ -167,5 +237,7 @@ def environments_equal(left: Environment, right: Environment) -> bool:
             if left_taint.labels != right_taint.labels or left_taint.cleared != right_taint.cleared:
                 return False
         if value.constant != other.constant:
+            return False
+        if value.callables != other.callables:
             return False
     return True
