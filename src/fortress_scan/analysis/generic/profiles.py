@@ -32,6 +32,9 @@ class LanguageSpec:
     weak_sanitizers: FrozenSet[str] = frozenset()
     declaration_keywords: FrozenSet[str] = frozenset()
     chain_separators: Tuple[str, ...] = (".",)
+    # Languages that write the type after the name (``const x: T = ...``) need
+    # it stripped, or the type name gets bound as the assignment target.
+    annotation_separator: Optional[str] = None
     annotation_sources: Dict[str, str] = field(default_factory=dict)
     backtick_command: bool = False
     bare_call_names: FrozenSet[str] = frozenset()
@@ -737,6 +740,7 @@ SPECS: Dict[str, LanguageSpec] = {
             }
         ),
         declaration_keywords=frozenset({"var", "let", "const"}),
+        annotation_separator=":",
     ),
     PHP: LanguageSpec(
         language=PHP,

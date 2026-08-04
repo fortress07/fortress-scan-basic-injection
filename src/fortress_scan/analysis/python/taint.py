@@ -56,6 +56,8 @@ def merge_entries(left: "Value", right: "Value") -> Tuple[Tuple[str, FrozenSet[C
     sides would hide a sink. In that case drop it and let the caller fall back
     to the union.
     """
+    if not left.entries and not right.entries:
+        return ()
     if not maps_its_callables(left) or not maps_its_callables(right):
         return ()
     combined = left.entries + right.entries
@@ -191,6 +193,17 @@ def combine(*values: Value) -> Value:
 
 
 def merge_values(left: Value, right: Value) -> Value:
+    # This is the hottest path in the analyzer, and almost every value carries
+    # no callable at all, so the empty cases are settled inline.
+    left_refs = left.callables
+    right_refs = right.callables
+    if not left_refs:
+        callables = right_refs
+    elif not right_refs:
+        callables = left_refs
+    else:
+        callables = limit_callables(left_refs | right_refs)
+    entries = () if not left.entries and not right.entries else merge_entries(left, right)
     return Value(
         taint=merge_taint(left.taint, right.taint),
         constant=left.constant and right.constant,
@@ -198,8 +211,8 @@ def merge_values(left: Value, right: Value) -> Value:
         elements=(),
         is_sequence=left.is_sequence and right.is_sequence,
         sanitized=left.sanitized or right.sanitized,
-        callables=merge_callables(left.callables, right.callables),
-        entries=merge_entries(left, right),
+        callables=callables,
+        entries=entries,
     )
 
 

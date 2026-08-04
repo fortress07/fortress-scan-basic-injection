@@ -72,7 +72,7 @@ token nên chỉ bắt được dạng "nguồn → biến → sink" trong cùng
 | Dự án của bạn viết bằng | Bắt được (đã đo) |
 | --- | --- |
 | **Python** — Flask, Django, FastAPI, CLI, script | 23/27 rule: command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode |
-| **JavaScript** — Express, Node | command, code (`eval`), SQL, dynamic `require`, XSS |
+| **JavaScript / TypeScript** — Express, Node | command, code (`eval`), SQL, dynamic `require`, XSS |
 | **PHP** — `$_GET`/`$_POST`/`$_COOKIE` | command, code (`eval`), SQL, `include`, `unserialize` |
 | **Ruby** — Rails-style `params` | command, code (`eval`), template (ERB), `Marshal.load` |
 | **Java/JVM** — Servlet `getParameter` | command, SQL, expression language (SpEL) |
@@ -191,9 +191,9 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
   trị "độ tin cậy" trong báo cáo phản ánh đúng điều đó.
 - **Không theo được dữ liệu lưu vào thuộc tính đối tượng**, và không phát hiện **injection bậc hai**
   (dữ liệu bẩn ghi vào CSDL rồi đọc ra dùng lại).
-- **TypeScript có chú thích kiểu ngay chỗ khai báo thì mất dấu vết dữ liệu.** Đã đo:
-  `const dir = req.query.dir` ra **critical**, nhưng `const dir: string = req.query.dir` chỉ còn
-  **medium**. Viết TypeScript mà khai báo có kiểu thì hãy đọc cả các cảnh báo mức medium.
+- **Kiểu viết trên nhiều dòng hoặc có `;` bên trong kiểu dữ liệu thì chưa tách câu lệnh đúng** —
+  ví dụ TypeScript `const o: {a: string; b: number} = nguon_ng` bị cắt câu ngay dấu `;`, nên chỉ
+  còn cảnh báo mức medium.
 - **Chưa hỗ trợ:** CRLF/header injection, log injection, path traversal, SSRF, open redirect,
   prototype pollution, ReDoS, lỗi logic nghiệp vụ.
 - Sẽ có **báo nhầm** (false positive) và **bỏ sót** (false negative) — phân tích tĩnh vốn không đầy

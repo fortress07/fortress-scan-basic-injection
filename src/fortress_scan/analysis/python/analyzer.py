@@ -104,7 +104,7 @@ class ModuleAnalysis:
         self.functions_by_name: Dict[str, List[FunctionInfo]] = {}
         self.summaries: Dict[str, Summary] = {}
         self._name_values: Dict[str, Value] = {}
-        self._attribute_refs: Dict[Tuple[str, str], FrozenSet[CallableRef]] = {}
+        self._attribute_refs: Dict[str, FrozenSet[CallableRef]] = {}
 
     def name_value(self, qualname: str) -> Value:
         """Bare names repeat constantly; hand out one shared immutable value."""
@@ -115,7 +115,9 @@ class ModuleAnalysis:
         return value
 
     def attribute_refs(self, dotted: str, attribute: str) -> FrozenSet[CallableRef]:
-        cached = self._attribute_refs.get((dotted, attribute))
+        # ``dotted`` always ends with ``.<attribute>``, so it alone is a key —
+        # this runs on every attribute load, no tuple allocation to spare.
+        cached = self._attribute_refs.get(dotted)
         if cached is None:
             receiver = dotted[: len(dotted) - len(attribute) - 1]
             cached = frozenset(
@@ -127,7 +129,7 @@ class ModuleAnalysis:
                     )
                 }
             )
-            self._attribute_refs[(dotted, attribute)] = cached
+            self._attribute_refs[dotted] = cached
         return cached
 
     def run(self, tree: ast.Module) -> List[Finding]:
@@ -647,6 +649,7 @@ class Evaluator:
 
         receiver = UNKNOWN
         callee = UNKNOWN
+        dotted: Optional[str] = None
         if isinstance(node.func, ast.Attribute):
             receiver = self._eval(node.func.value, env)
             dotted = dotted_name(node.func)
@@ -657,7 +660,7 @@ class Evaluator:
         elif isinstance(node.func, (ast.Call, ast.Subscript, ast.IfExp)):
             callee = self._eval(node.func, env)
 
-        targets = _call_targets(node, qualname, callee)
+        targets = _call_targets(node, qualname, callee, dotted)
         effective = targets[0].qualname if targets else None
 
         self._check_sink(node, targets, argument_values, keyword_values)
@@ -1198,7 +1201,10 @@ def _receiver_matches(receiver: Optional[str], hints: FrozenSet[str]) -> bool:
 
 
 def _call_targets(
-    node: ast.Call, qualname: Optional[str], callee: Value
+    node: ast.Call,
+    qualname: Optional[str],
+    callee: Value,
+    dotted: Optional[str],
 ) -> Tuple[CallableRef, ...]:
     """Which callables this call may reach.
 
@@ -1211,12 +1217,12 @@ def _call_targets(
     if not isinstance(node.func, (ast.Name, ast.Attribute)) or qualname is None:
         return ()
     if isinstance(node.func, ast.Attribute):
+        # ``dotted`` is the unresolved form and ends with ``.<attr>``; slicing it
+        # avoids walking the receiver chain a second time.
+        attribute = node.func.attr
+        receiver = dotted[: len(dotted) - len(attribute) - 1] if dotted else None
         return (
-            CallableRef(
-                qualname=qualname,
-                attribute=node.func.attr,
-                receiver=dotted_name(node.func.value),
-            ),
+            CallableRef(qualname=qualname, attribute=attribute, receiver=receiver or None),
         )
     return (CallableRef(qualname=qualname),)
 
