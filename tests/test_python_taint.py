@@ -336,7 +336,6 @@ def test_syntax_error_is_reported_as_unparsable():
         relative_path="broken.py",
         language=PYTHON,
         source=source,
-        lines=tuple(source.splitlines()),
         config=Config(),
     )
     with pytest.raises(UnparsableSource):
