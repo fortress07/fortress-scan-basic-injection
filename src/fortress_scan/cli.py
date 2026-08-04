@@ -142,6 +142,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="bỏ qua các chú thích fortress-scan: ignore trong mã được quét",
     )
     behaviour.add_argument(
+        "--no-ignore-files",
+        action="store_true",
+        help="không đọc các tệp .fortress-scanignore trong mã được quét",
+    )
+    behaviour.add_argument(
         "--no-vcs-ignore", action="store_true", help="không đọc các tệp .gitignore"
     )
     behaviour.add_argument(
@@ -325,6 +330,8 @@ def _resolve_config(args: argparse.Namespace) -> Config:
         overrides["follow_symlinks"] = True
     if args.no_inline_suppressions:
         overrides["honor_inline_suppressions"] = False
+    if args.no_ignore_files:
+        overrides["respect_ignore_files"] = False
     if args.no_vcs_ignore:
         overrides["respect_vcs_ignore"] = False
     if args.include_env_sources:

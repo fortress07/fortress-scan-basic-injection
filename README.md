@@ -142,7 +142,7 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 
 ### 🖥️ Nền tảng
 
-> **Phát triển và kiểm thử trên Windows 11** — toàn bộ 479 test đều chạy qua.
+> **Phát triển và kiểm thử trên Windows 11**
 >
 > **Trên Linux và macOS: tác giả chưa chạy thử thực tế.** Mã nguồn viết theo hướng đa nền tảng và
 > nhiều khả năng chạy bình thường, nhưng **chưa có bằng chứng thực nghiệm** — nếu bạn dùng
@@ -150,12 +150,24 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 
 ### Khi quét mã không đáng tin
 
-Chú thích `fortress-scan: ignore`, tệp `.fortress-scan.json` và `.gitignore` đều nằm **trong chính
-mã được quét**, nên người viết mã có thể dùng chúng để giấu phát hiện. Khi review code lạ, hãy chạy:
+Chú thích `fortress-scan: ignore`, tệp `.fortress-scan.json`, `.fortress-scanignore` và `.gitignore`
+đều nằm **trong chính mã được quét**, nên người viết mã có thể dùng chúng để giấu phát hiện. Khi
+review code lạ, hãy tắt cả bốn đường đó:
 
 ```bash
-python -m fortress_scan <duong-dan> --no-inline-suppressions --no-config --no-vcs-ignore
+python -m fortress_scan <duong-dan> \
+    --no-inline-suppressions \
+    --no-config \
+    --no-ignore-files \
+    --no-vcs-ignore
 ```
+
+| Cờ | Vô hiệu hoá |
+| --- | --- |
+| `--no-inline-suppressions` | chú thích `# fortress-scan: ignore` trong mã |
+| `--no-config` | tệp `.fortress-scan.json` |
+| `--no-ignore-files` | tệp `.fortress-scanignore` |
+| `--no-vcs-ignore` | tệp `.gitignore` |
 
 ---
 
@@ -176,8 +188,7 @@ Mình đọc và phản hồi tất cả, chỉ là có thể hơi chậm.
 
 ## Tác giả & lời cảm ơn
 
-Được viết bởi **[fortress07](https://github.com/fortress07)** — dự án cá nhân, không liên quan tới
-tổ chức hay trường học nào.
+Được viết bởi **[fortress07](https://github.com/fortress07)** — dự án cá nhân.
 
 Dự án có **sự hỗ trợ của AI** (Claude) trong quá trình tham khảo cách triển khai và đẩy nhanh tiến
 độ: phác thảo kiến trúc, sinh mã cho các engine phân tích, viết bộ test và soạn tài liệu. Toàn bộ
