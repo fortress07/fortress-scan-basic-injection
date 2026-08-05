@@ -427,6 +427,39 @@ class TestEvasionAttempts:
         )
         assert "FSB-CMD-001" in rule_ids(source)
 
+    def test_directive_inside_a_nested_template_literal(self, tmp_path: Path):
+        """`outer ${`inner`} end` là JavaScript hợp lệ.
+
+        Vùng nội suy là mã nên nó được phép chứa một chuỗi lồng dùng đúng dấu
+        backtick đang mở. Ai chỉ so khớp ký tự sẽ đóng chuỗi ở dấu backtick
+        thứ hai, để lộ phần ruột ra ngoài thành mã, và một chỉ thị nằm trong
+        dữ liệu lại được tính như chú thích thật -- tắt sạch cả tệp.
+        """
+        (tmp_path / "app.js").write_text(
+            "const { exec } = require('child_process');\n"
+            "const label = `outer ${`# fortress-scan: ignore-file`} end`;\n"
+            "function run(req) {\n"
+            "  exec('ping ' + req.query.host);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+        assert result.suppressed == 0
+
+    def test_a_real_comment_after_a_nested_template_literal_still_works(self, tmp_path: Path):
+        (tmp_path / "app.js").write_text(
+            "const { exec } = require('child_process');\n"
+            "const label = `outer ${`inner`} end`;\n"
+            "// fortress-scan: ignore-file\n"
+            "function run(req) {\n"
+            "  exec('ping ' + req.query.host);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        assert not any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
     def test_suppression_directive_inside_a_multiline_docstring(self):
         source = (
             "import os\n"

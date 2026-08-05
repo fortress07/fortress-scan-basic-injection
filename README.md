@@ -1,4 +1,4 @@
-# Fortress Scan — Basic Injection
+# Fortress Scan Basic Injection
 
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
@@ -241,10 +241,10 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 | Tình huống trong code của ae | Kết quả |
 | --- | --- |
 | Đặt tên biến/hàm bằng tiếng Việt, Trung, Nhật (kể cả có dấu) | ✅ Không ảnh hưởng gì |
-| Đổi tên thư viện — `import os as he_dieu_hanh` | ✅ Vẫn bắt được |
-| Gán sink vào biến rồi gọi — `chay = os.system; chay(cmd)` | ✅ Vẫn bắt được |
-| Sink nằm trong bảng điều phối / danh sách — `handlers["run"](cmd)` | ✅ Vẫn bắt được |
-| Gọi qua `getattr` với tên hằng — `getattr(os, "system")(cmd)` | ✅ Vẫn bắt được |
+| Đổi tên thư viện - `import os as he_dieu_hanh` | ✅ Vẫn bắt được |
+| Gán sink vào biến rồi gọi - `chay = os.system; chay(cmd)` | ✅ Vẫn bắt được |
+| Sink nằm trong bảng điều phối / danh sách - `handlers["run"](cmd)` | ✅ Vẫn bắt được |
+| Gọi qua `getattr` với tên hằng - `getattr(os, "system")(cmd)` | ✅ Vẫn bắt được |
 | Hàm bọc / tầng CSDL tự viết, **cùng tệp** | ✅ Tự học được, mức critical |
 | Hàm bọc / tầng CSDL tự viết, **khác tệp trong dự án** | ⚠️ Chỉ còn mức medium, và báo ở file wrapper chứ không phải chỗ gọi |
 | Framework hoặc helper lấy input tự viết mà công cụ chưa biết | ⚠️ Chỉ còn mức medium |

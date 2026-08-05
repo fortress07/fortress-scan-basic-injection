@@ -25,6 +25,12 @@ _TRIPLE_QUOTES: Tuple[str, ...] = ('"""', "'''")
 _LINE_QUOTES: Tuple[str, ...] = ('"', "'", "`")
 # Chuỗi một nháy không bắc qua dòng; chỉ ba nháy và backtick mới bắc được.
 _SPANNING_QUOTES: Tuple[str, ...] = ("`",)
+# Vùng nội suy bên trong chuỗi là mã, nên nó được phép chứa một chuỗi lồng
+# dùng đúng dấu nháy đang mở -- `outer ${`inner`} end` là JavaScript hợp lệ.
+# Không nhảy qua trọn vùng này thì dấu nháy mở của chuỗi lồng bị hiểu nhầm là
+# dấu đóng của chuỗi ngoài, phần ruột rơi ra ngoài và một chỉ thị nằm trong
+# dữ liệu lại được tính như chú thích thật.
+_INTERPOLATION_MARKERS: Tuple[Tuple[str, str], ...] = (("${", "}"), ("#{", "}"), ("{$", "}"))
 
 
 def _starts_with_any(text: str, index: int, options: Tuple[str, ...]) -> Optional[str]:
@@ -32,6 +38,53 @@ def _starts_with_any(text: str, index: int, options: Tuple[str, ...]) -> Optiona
         if text.startswith(option, index):
             return option
     return None
+
+
+def _skip_nested_quote(raw: str, index: int) -> int:
+    quote = raw[index]
+    cursor = index + 1
+    length = len(raw)
+    while cursor < length:
+        if raw[cursor] == "\\":
+            cursor += 2
+            continue
+        if raw[cursor] == quote:
+            return cursor + 1
+        cursor += 1
+    return cursor
+
+
+def _interpolation_end(raw: str, index: int) -> int:
+    """Chỉ số ngay sau dấu đóng khớp của vùng nội suy, hoặc -1 nếu không có."""
+    for opener, closer in _INTERPOLATION_MARKERS:
+        if raw.startswith(opener, index):
+            return _scan_to_closer(raw, index + len(opener), opener, closer)
+    return -1
+
+
+def _scan_to_closer(raw: str, cursor: int, opener: str, closer: str) -> int:
+    depth = 1
+    length = len(raw)
+    while cursor < length:
+        char = raw[cursor]
+        if char == "\\":
+            cursor += 2
+            continue
+        if char in ("'", '"', "`"):
+            cursor = _skip_nested_quote(raw, cursor)
+            continue
+        if raw.startswith(opener, cursor):
+            depth += 1
+            cursor += len(opener)
+            continue
+        if char == closer:
+            depth -= 1
+            cursor += 1
+            if depth == 0:
+                return cursor
+            continue
+        cursor += 1
+    return -1
 
 
 def _close_open_string(raw: str, index: int, delimiter: str) -> Tuple[str, int, Optional[str]]:
@@ -55,6 +108,13 @@ def _consume_quoted(raw: str, index: int, quote: str) -> Tuple[str, int, Optiona
             if index < length:
                 pieces.append(" ")
                 index += 1
+            continue
+        end = _interpolation_end(raw, index)
+        if end != -1:
+            # Cả vùng nội suy bị xoá trắng: bên trong là mã, nhưng ở đây ta chỉ
+            # cần nó không sinh ra chỉ thị, và xoá là hướng an toàn.
+            pieces.append(" " * (end - index))
+            index = end
             continue
         if char == quote:
             pieces.append(quote)
