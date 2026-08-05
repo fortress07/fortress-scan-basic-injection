@@ -212,6 +212,49 @@ rsync -a ./dist/ "$TARGET"
     assert "FSB-CMD-004" not in rule_ids(source, SHELL)
 
 
+class TestNestedTemplateLiterals:
+    """`outer ${`inner`} end` -- vùng nội suy chứa chuỗi lồng cùng dấu nháy.
+
+    Đóng chuỗi ở dấu backtick thứ hai làm phần ruột rơi ra ngoài thành mã, gây
+    cả hai chiều: bỏ sót taint đi xuyên qua nó, và báo nhầm khi phần ruột chỉ
+    là văn bản mô tả.
+    """
+
+    def test_taint_survives_a_nested_template_literal(self):
+        source = """
+const cp = require("child_process");
+function h(req) {
+  const host = req.query.host;
+  cp.exec(`ping ${`${host}`}`);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_text_inside_a_nested_template_literal_is_not_code(self):
+        source = 'const label = `doc ${`use exec("ping " + req.query.host) here`} end`;\n'
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_code_after_a_nested_template_literal_is_still_analysed(self):
+        source = """
+const cp = require("child_process");
+const msg = `a ${`b`} c`;
+function h(req) {
+  cp.exec("ping " + req.query.host);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_plain_interpolation_is_unaffected(self):
+        source = """
+const cp = require("child_process");
+function h(req) {
+  const host = req.query.host;
+  cp.exec(`ping ${host}`);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+
 class TestTypescriptTypeAnnotations:
     """A type annotation must not become the assignment target.
 
