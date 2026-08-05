@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Sequence, Set
+from typing import Any, Dict, Optional, Sequence, Set, Tuple
 
 from . import __version__
 from .core import baseline as baseline_module
@@ -11,6 +11,7 @@ from .core.config import (
     Config,
     ConfigError,
     build_config,
+    coverage_reductions,
     find_config_file,
     load_config_file,
 )
@@ -26,6 +27,7 @@ from .report import (
 )
 from .security import paths as safe_paths
 from .security import runtime as sandbox
+from .security import text as safe_text
 
 EXIT_CLEAN = 0
 EXIT_FINDINGS = 1
@@ -193,10 +195,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         sys.stderr.write("fortress-scan: cảnh báo: %s\n" % warning)
 
     try:
-        config = _resolve_config(args)
+        config, config_notices = _resolve_config(args)
     except (ConfigError, ValueError) as exc:
         sys.stderr.write("fortress-scan: %s\n" % exc)
         return EXIT_USAGE
+    if config_notices:
+        sys.stderr.write("fortress-scan: cảnh báo: %s\n" % config_notices[0])
+        for detail in config_notices[1:]:
+            sys.stderr.write("    %s\n" % detail)
 
     baseline_fingerprints: Set[str] = set()
     if args.baseline:
@@ -282,19 +288,26 @@ def _emit(result: ScanResult, args: argparse.Namespace, output_path: Optional[Pa
     sys.stderr.write("fortress-scan: đã ghi báo cáo vào %s\n" % output_path)
 
 
-def _resolve_config(args: argparse.Namespace) -> Config:
+def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
+    """Nạp tệp cấu hình, kèm cảnh báo nếu nó tự tìm thấy trong cây bị quét."""
     config = Config()
-    if not args.no_config:
-        source: Optional[Path] = None
-        if args.config:
-            source = Path(args.config)
-            if not source.is_file():
-                raise ConfigError("không tìm thấy tệp cấu hình: %s" % args.config)
-        else:
-            target = Path(args.target)
-            source = find_config_file(target if target.exists() else Path("."))
-        if source is not None:
-            config = build_config(load_config_file(source), config)
+    if args.no_config:
+        return config, ()
+    if args.config:
+        source = Path(args.config)
+        if not source.is_file():
+            raise ConfigError("không tìm thấy tệp cấu hình: %s" % args.config)
+        return build_config(load_config_file(source), config), ()
+    target = Path(args.target)
+    source = find_config_file(target if target.exists() else Path("."))
+    if source is None:
+        return config, ()
+    data = load_config_file(source)
+    return build_config(data, config), _project_config_notices(source, data)
+
+
+def _resolve_config(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
+    config, notices = _config_from_file(args)
 
     known = {rule.id for rule in all_rules()}
     disabled = tuple(item.strip().upper() for item in args.disable)
@@ -336,7 +349,25 @@ def _resolve_config(args: argparse.Namespace) -> Config:
         overrides["respect_vcs_ignore"] = False
     if args.include_env_sources:
         overrides["include_low_signal_sources"] = True
-    return config.with_overrides(**overrides)
+    return config.with_overrides(**overrides), notices
+
+
+def _project_config_notices(source: Path, data: Dict[str, Any]) -> Tuple[str, ...]:
+    """Cấu hình tự tìm thấy trong cây bị quét có thể làm báo cáo sạch đi.
+
+    Khi quét mã của người khác thì tệp này do họ viết, nên nó phải hiện ra --
+    "sạch" mà không nói vì sao sạch chính là thứ tạo ra false confidence.
+    """
+    reductions = coverage_reductions(data)
+    if not reductions:
+        return ()
+    lines = [
+        "%s trong cây được quét đã thu hẹp phạm vi quét:"
+        % safe_text.display_path(str(source))
+    ]
+    lines.extend("- %s" % note for note in reductions)
+    lines.append("chạy lại với --no-config nếu không tin tệp cấu hình này")
+    return tuple(lines)
 
 
 if __name__ == "__main__":

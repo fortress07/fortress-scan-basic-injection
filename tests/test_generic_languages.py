@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from fortress_scan.core.config import Config
 from fortress_scan.core.engine import scan_source
-from fortress_scan.languages import CSHARP, GO, JAVA, JAVASCRIPT, PHP, RUBY, SHELL
+from fortress_scan.languages import (
+    CSHARP,
+    GO,
+    JAVA,
+    JAVASCRIPT,
+    PHP,
+    RUBY,
+    SHELL,
+    TYPESCRIPT,
+)
 
 
 def rule_ids(source: str, language: str):
@@ -201,3 +210,143 @@ TARGET="$1"
 rsync -a ./dist/ "$TARGET"
 """
     assert "FSB-CMD-004" not in rule_ids(source, SHELL)
+
+
+class TestNestedTemplateLiterals:
+    """`outer ${`inner`} end` -- vùng nội suy chứa chuỗi lồng cùng dấu nháy.
+
+    Đóng chuỗi ở dấu backtick thứ hai làm phần ruột rơi ra ngoài thành mã, gây
+    cả hai chiều: bỏ sót taint đi xuyên qua nó, và báo nhầm khi phần ruột chỉ
+    là văn bản mô tả.
+    """
+
+    def test_taint_survives_a_nested_template_literal(self):
+        source = """
+const cp = require("child_process");
+function h(req) {
+  const host = req.query.host;
+  cp.exec(`ping ${`${host}`}`);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_text_inside_a_nested_template_literal_is_not_code(self):
+        source = 'const label = `doc ${`use exec("ping " + req.query.host) here`} end`;\n'
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_code_after_a_nested_template_literal_is_still_analysed(self):
+        source = """
+const cp = require("child_process");
+const msg = `a ${`b`} c`;
+function h(req) {
+  cp.exec("ping " + req.query.host);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_plain_interpolation_is_unaffected(self):
+        source = """
+const cp = require("child_process");
+function h(req) {
+  const host = req.query.host;
+  cp.exec(`ping ${host}`);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+
+class TestTypescriptTypeAnnotations:
+    """A type annotation must not become the assignment target.
+
+    ``const dir: string = req.query.dir`` used to bind the taint to ``string``
+    instead of ``dir``, so the sink downgraded from critical to medium — silent
+    and easy to triage away.
+    """
+
+    def test_annotated_declaration_still_tracks_taint(self):
+        source = """
+import { exec } from "child_process";
+export function h(req: any): void {
+  const dir: string = req.query.dir;
+  exec("ls " + dir);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, TYPESCRIPT)
+
+    def test_annotated_and_bare_declarations_agree(self):
+        bare = """
+import { exec } from "child_process";
+export function h(req: any): void {
+  const dir = req.query.dir;
+  exec("ls " + dir);
+}
+"""
+        annotated = """
+import { exec } from "child_process";
+export function h(req: any): void {
+  const dir: string = req.query.dir;
+  exec("ls " + dir);
+}
+"""
+        assert sorted(rule_ids(bare, TYPESCRIPT)) == sorted(rule_ids(annotated, TYPESCRIPT))
+
+    def test_generic_type_argument_is_not_the_target(self):
+        source = """
+import { exec } from "child_process";
+export function h(req: any): void {
+  const m: Map<string, number> = req.query.m;
+  exec("ls " + m);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, TYPESCRIPT)
+
+    def test_array_type_is_not_the_target(self):
+        source = """
+import { exec } from "child_process";
+export function h(req: any): void {
+  const a: string[] = req.query.a;
+  exec("ls " + a);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, TYPESCRIPT)
+
+    def test_optional_annotated_property_is_not_the_target(self):
+        source = """
+import { exec } from "child_process";
+export function h(req: any): void {
+  const v?: string = req.query.v;
+  exec("ls " + v);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, TYPESCRIPT)
+
+    def test_annotated_sanitizer_result_stays_clean(self):
+        source = """
+import { exec } from "child_process";
+export function h(req: any): void {
+  const raw: string = req.query.d;
+  const safe: string = encodeURIComponent(raw);
+  exec("ls " + safe);
+}
+"""
+        assert rule_ids(source, TYPESCRIPT) == []
+
+    def test_annotated_constant_is_not_reported(self):
+        source = """
+import { exec } from "child_process";
+export function h(): void {
+  const dir: string = "/tmp";
+  exec("ls " + dir);
+}
+"""
+        assert "FSB-CMD-001" not in rule_ids(source, TYPESCRIPT)
+
+    def test_javascript_ternary_colon_is_untouched(self):
+        source = """
+const child_process = require("child_process");
+function h(req, flag) {
+  const t = flag ? req.query.a : req.query.b;
+  child_process.exec("ls " + t);
+}
+"""
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
