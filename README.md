@@ -94,7 +94,7 @@ kiểm tra bằng tay.
 
 ### CHỈ ĐỌC VÀ IN BÁO CÁO, KHÔNG LÀM GÌ KHÁC !
 
-Để đảm bảo tính bí mật về dự án của anh em khi dùng Fortress Scan thì mình cam đoan Fortress Scan:
+Để đảm bảo tính bí mật về mã nguồn dự án của anh em khi dùng Fortress Scan thì mình đã thiết kế Fortress Scan:
 
 - **Không sửa gì** trong code
 - **Không ghi file nào** trừ khi anh em tự yêu cầu bằng `-o` hoặc `--write-baseline`
