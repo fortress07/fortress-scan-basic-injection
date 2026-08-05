@@ -151,6 +151,44 @@ _LIST_KEYS = frozenset(
 
 _MAX_CONFIG_BYTES = 256 * 1024
 
+# Những khóa này thu hẹp thứ được quét hoặc được báo. Tệp cấu hình nằm trong
+# chính cây thư mục bị quét là dữ liệu không tin cậy khi ta quét mã của người
+# khác -- một báo cáo "sạch" do nó tạo ra phải nói rõ vì sao mình sạch.
+_COVERAGE_KEYS: Tuple[Tuple[str, str], ...] = (
+    ("disabled_rules", "tắt rule"),
+    ("enabled_rules", "chỉ bật một tập rule"),
+    ("exclude", "loại trừ đường dẫn"),
+    ("include", "chỉ quét một tập đường dẫn"),
+    ("excluded_directories", "loại trừ thư mục"),
+    ("min_severity", "bỏ qua phát hiện dưới mức"),
+    ("min_confidence", "bỏ qua phát hiện dưới độ tin cậy"),
+    ("fail_on", "đổi ngưỡng thoát khác 0"),
+    ("max_file_bytes", "giới hạn kích thước tệp"),
+    ("max_files", "giới hạn số tệp"),
+    ("max_total_bytes", "giới hạn tổng dung lượng"),
+    ("node_budget", "giới hạn ngân sách phân tích"),
+    ("token_budget", "giới hạn ngân sách phân tích"),
+)
+
+
+def coverage_reductions(data: Dict[str, Any]) -> Tuple[str, ...]:
+    """Mô tả những thiết lập trong tệp cấu hình làm hẹp phạm vi quét."""
+    notes = []
+    for key, label in _COVERAGE_KEYS:
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(value, list):
+            if not value:
+                continue
+            shown = ", ".join(str(item) for item in value[:5])
+            if len(value) > 5:
+                shown += ", ... (%d mục)" % len(value)
+            notes.append("%s: %s" % (label, shown))
+        else:
+            notes.append("%s: %s" % (label, value))
+    return tuple(notes)
+
 
 def find_config_file(start: Path) -> Optional[Path]:
     base = start if start.is_dir() else start.parent

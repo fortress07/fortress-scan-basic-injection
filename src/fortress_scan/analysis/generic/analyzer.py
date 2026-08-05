@@ -407,7 +407,34 @@ def _assignment_position(statement: Sequence[Token], spec: LanguageSpec) -> Opti
     return None
 
 
+def _strip_type_annotation(left: Sequence[Token], spec: LanguageSpec) -> Sequence[Token]:
+    """Drop ``: T`` from ``const x: T = ...`` so the target stays ``x``.
+
+    Only the first separator at bracket depth zero counts; a colon inside an
+    object literal, a generic argument or an index type belongs to the type, not
+    to the declaration.
+    """
+    separator = spec.annotation_separator
+    if separator is None:
+        return left
+    depth = 0
+    for index, token in enumerate(left):
+        if token.kind != OP or token.in_string:
+            continue
+        if token.text in "([{":
+            depth += 1
+        elif token.text in ")]}":
+            depth = max(0, depth - 1)
+        elif depth == 0 and token.text == separator:
+            trimmed = list(left[:index])
+            while trimmed and trimmed[-1].kind == OP and trimmed[-1].text == "?":
+                trimmed.pop()
+            return trimmed
+    return left
+
+
 def _assignment_target(left: Sequence[Token], spec: LanguageSpec) -> Optional[str]:
+    left = _strip_type_annotation(left, spec)
     filtered = [token for token in left if token.kind in (IDENT, OP)]
     if not filtered:
         return None

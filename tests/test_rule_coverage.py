@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Dict, Tuple
 
 import pytest
@@ -271,3 +273,24 @@ def test_rule_stays_silent_on_safe_variant(rule_id: str):
     language, source = SAFE_VARIANTS[rule_id]
     found = rule_ids(language, source)
     assert rule_id not in found, "%s bao nham tren ma an toan; nhan duoc: %s" % (rule_id, found)
+
+
+def _readme_text() -> str:
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    return readme.read_text(encoding="utf-8")
+
+
+def test_readme_states_the_real_rule_count():
+    """README da tung ghi 26 rule trong khi registry co 27; khoa lai de khong lech nua."""
+    registered = len(list(all_rules()))
+    declared = re.search(r"\*\*(\d+) rule,", _readme_text())
+    assert declared is not None, "README khong con cau '**N rule,' de doi chieu"
+    assert int(declared.group(1)) == registered, (
+        "README ghi %s rule nhung registry co %d" % (declared.group(1), registered)
+    )
+
+
+def test_readme_lists_every_registered_rule_id():
+    text = _readme_text()
+    missing = sorted(rule.id for rule in all_rules() if rule.id.rsplit("-", 1)[0] not in text)
+    assert missing == [], "README chua nhac toi cac ho rule sau: %s" % missing
