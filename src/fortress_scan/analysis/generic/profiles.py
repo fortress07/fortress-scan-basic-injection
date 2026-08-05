@@ -214,38 +214,55 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
     ),
 )
 
+# Nhãn nguồn dữ liệu hiện thẳng trong báo cáo, và cùng một nhãn được dùng lại
+# cho hàng chục API khác nhau. Gõ tay mỗi lần thì chỉ cần sai một bản là báo
+# cáo mô tả cùng một loại nguồn theo hai kiểu khác nhau.
+QUERY_PARAM = "tham số truy vấn HTTP"
+REQUEST_BODY = "body của request HTTP"
+PATH_PARAM = "tham số đường dẫn HTTP"
+HTTP_HEADER = "header HTTP"
+HTTP_COOKIE = "cookie HTTP"
+REQUEST_PARAM = "tham số của request HTTP"
+FORM_FIELD = "trường form HTTP"
+URL_QUERY_FRAGMENT = "fragment hoặc query của URL"
+DOCUMENT_URL = "URL của tài liệu"
+COMMAND_LINE_ARG = "tham số dòng lệnh"
+ENVIRONMENT_VARIABLE = "biến môi trường"
+QUERY_STRING = "query string HTTP"
+STANDARD_INPUT = "luồng nhập chuẩn"
+
 _JS_SOURCES: Dict[str, str] = {
-    "req.query": "tham số truy vấn HTTP",
-    "req.body": "body của request HTTP",
-    "req.params": "tham số đường dẫn HTTP",
-    "req.headers": "header HTTP",
-    "req.cookies": "cookie HTTP",
-    "req.rawBody": "body của request HTTP",
-    "req.param": "tham số của request HTTP",
-    "req.get": "header HTTP",
-    "request.query": "tham số truy vấn HTTP",
-    "request.body": "body của request HTTP",
-    "request.params": "tham số đường dẫn HTTP",
-    "request.headers": "header HTTP",
-    "ctx.query": "tham số truy vấn HTTP",
+    "req.query": QUERY_PARAM,
+    "req.body": REQUEST_BODY,
+    "req.params": PATH_PARAM,
+    "req.headers": HTTP_HEADER,
+    "req.cookies": HTTP_COOKIE,
+    "req.rawBody": REQUEST_BODY,
+    "req.param": REQUEST_PARAM,
+    "req.get": HTTP_HEADER,
+    "request.query": QUERY_PARAM,
+    "request.body": REQUEST_BODY,
+    "request.params": PATH_PARAM,
+    "request.headers": HTTP_HEADER,
+    "ctx.query": QUERY_PARAM,
     "ctx.request": "request HTTP",
-    "ctx.params": "tham số đường dẫn HTTP",
-    "location.search": "fragment hoặc query của URL",
-    "location.hash": "fragment hoặc query của URL",
-    "location.href": "fragment hoặc query của URL",
+    "ctx.params": PATH_PARAM,
+    "location.search": URL_QUERY_FRAGMENT,
+    "location.hash": URL_QUERY_FRAGMENT,
+    "location.href": URL_QUERY_FRAGMENT,
     "location.pathname": "đường dẫn URL",
-    "window.location": "fragment hoặc query của URL",
+    "window.location": URL_QUERY_FRAGMENT,
     "window.name": "tên cửa sổ",
-    "document.URL": "URL của tài liệu",
-    "document.documentURI": "URL của tài liệu",
+    "document.URL": DOCUMENT_URL,
+    "document.documentURI": DOCUMENT_URL,
     "document.referrer": "referrer của tài liệu",
-    "document.location": "URL của tài liệu",
+    "document.location": DOCUMENT_URL,
     "localStorage.getItem": "kho lưu trữ trình duyệt",
     "sessionStorage.getItem": "kho lưu trữ trình duyệt",
     "event.data": "dữ liệu sự kiện message",
     "event.body": "dữ liệu sự kiện",
     "event.queryStringParameters": "dữ liệu sự kiện",
-    "process.argv": "tham số dòng lệnh",
+    "process.argv": COMMAND_LINE_ARG,
 }
 
 _PHP_SINKS: Tuple[GenericSink, ...] = (
@@ -338,19 +355,19 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _PHP_SOURCES: Dict[str, str] = {
-    "$_GET": "tham số truy vấn HTTP",
-    "$_POST": "trường form HTTP",
-    "$_REQUEST": "tham số của request HTTP",
-    "$_COOKIE": "cookie HTTP",
+    "$_GET": QUERY_PARAM,
+    "$_POST": FORM_FIELD,
+    "$_REQUEST": REQUEST_PARAM,
+    "$_COOKIE": HTTP_COOKIE,
     "$_SERVER": "biến server HTTP",
     "$_FILES": "tệp tải lên qua HTTP",
-    "$_ENV": "biến môi trường",
-    "$HTTP_RAW_POST_DATA": "body của request HTTP",
-    "$argv": "tham số dòng lệnh",
-    "getenv": "biến môi trường",
-    "filter_input": "tham số của request HTTP",
-    "apache_request_headers": "header HTTP",
-    "getallheaders": "header HTTP",
+    "$_ENV": ENVIRONMENT_VARIABLE,
+    "$HTTP_RAW_POST_DATA": REQUEST_BODY,
+    "$argv": COMMAND_LINE_ARG,
+    "getenv": ENVIRONMENT_VARIABLE,
+    "filter_input": REQUEST_PARAM,
+    "apache_request_headers": HTTP_HEADER,
+    "getallheaders": HTTP_HEADER,
 }
 
 _JAVA_SINKS: Tuple[GenericSink, ...] = (
@@ -432,32 +449,32 @@ _JAVA_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _JAVA_SOURCES: Dict[str, str] = {
-    "request.getParameter": "tham số truy vấn HTTP",
-    "request.getParameterValues": "tham số truy vấn HTTP",
-    "request.getHeader": "header HTTP",
-    "request.getHeaders": "header HTTP",
-    "request.getQueryString": "query string HTTP",
-    "request.getCookies": "cookie HTTP",
-    "request.getInputStream": "body của request HTTP",
-    "request.getReader": "body của request HTTP",
+    "request.getParameter": QUERY_PARAM,
+    "request.getParameterValues": QUERY_PARAM,
+    "request.getHeader": HTTP_HEADER,
+    "request.getHeaders": HTTP_HEADER,
+    "request.getQueryString": QUERY_STRING,
+    "request.getCookies": HTTP_COOKIE,
+    "request.getInputStream": REQUEST_BODY,
+    "request.getReader": REQUEST_BODY,
     "request.getRequestURI": "đường dẫn của request HTTP",
     "request.getPathInfo": "đường dẫn của request HTTP",
-    "req.getParameter": "tham số truy vấn HTTP",
-    "req.getHeader": "header HTTP",
-    "System.getenv": "biến môi trường",
+    "req.getParameter": QUERY_PARAM,
+    "req.getHeader": HTTP_HEADER,
+    "System.getenv": ENVIRONMENT_VARIABLE,
     "System.getProperty": "thuộc tính hệ thống",
 }
 
 _JAVA_ANNOTATIONS: Dict[str, str] = {
-    "RequestParam": "tham số truy vấn HTTP",
-    "PathVariable": "tham số đường dẫn HTTP",
-    "RequestBody": "body của request HTTP",
-    "RequestHeader": "header HTTP",
-    "CookieValue": "cookie HTTP",
-    "QueryParam": "tham số truy vấn HTTP",
-    "PathParam": "tham số đường dẫn HTTP",
-    "FormParam": "trường form HTTP",
-    "HeaderParam": "header HTTP",
+    "RequestParam": QUERY_PARAM,
+    "PathVariable": PATH_PARAM,
+    "RequestBody": REQUEST_BODY,
+    "RequestHeader": HTTP_HEADER,
+    "CookieValue": HTTP_COOKIE,
+    "QueryParam": QUERY_PARAM,
+    "PathParam": PATH_PARAM,
+    "FormParam": FORM_FIELD,
+    "HeaderParam": HTTP_HEADER,
 }
 
 _RUBY_SINKS: Tuple[GenericSink, ...] = (
@@ -510,17 +527,17 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _RUBY_SOURCES: Dict[str, str] = {
-    "params": "tham số của request HTTP",
-    "request.params": "tham số của request HTTP",
-    "request.body": "body của request HTTP",
-    "request.query_string": "query string HTTP",
-    "request.env": "header HTTP",
-    "cookies": "cookie HTTP",
+    "params": REQUEST_PARAM,
+    "request.params": REQUEST_PARAM,
+    "request.body": REQUEST_BODY,
+    "request.query_string": QUERY_STRING,
+    "request.env": HTTP_HEADER,
+    "cookies": HTTP_COOKIE,
     "session": "giá trị session",
-    "ENV": "biến môi trường",
-    "ARGV": "tham số dòng lệnh",
-    "gets": "luồng nhập chuẩn",
-    "STDIN.gets": "luồng nhập chuẩn",
+    "ENV": ENVIRONMENT_VARIABLE,
+    "ARGV": COMMAND_LINE_ARG,
+    "gets": STANDARD_INPUT,
+    "STDIN.gets": STANDARD_INPUT,
 }
 
 _GO_SINKS: Tuple[GenericSink, ...] = (
@@ -565,18 +582,18 @@ _GO_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _GO_SOURCES: Dict[str, str] = {
-    "r.URL.Query": "tham số truy vấn HTTP",
-    "r.FormValue": "trường form HTTP",
-    "r.PostFormValue": "trường form HTTP",
-    "r.Header.Get": "header HTTP",
-    "r.Body": "body của request HTTP",
-    "req.URL.Query": "tham số truy vấn HTTP",
-    "req.FormValue": "trường form HTTP",
-    "mux.Vars": "tham số đường dẫn HTTP",
-    "c.Param": "tham số đường dẫn HTTP",
-    "c.Query": "tham số truy vấn HTTP",
-    "os.Args": "tham số dòng lệnh",
-    "os.Getenv": "biến môi trường",
+    "r.URL.Query": QUERY_PARAM,
+    "r.FormValue": FORM_FIELD,
+    "r.PostFormValue": FORM_FIELD,
+    "r.Header.Get": HTTP_HEADER,
+    "r.Body": REQUEST_BODY,
+    "req.URL.Query": QUERY_PARAM,
+    "req.FormValue": FORM_FIELD,
+    "mux.Vars": PATH_PARAM,
+    "c.Param": PATH_PARAM,
+    "c.Query": QUERY_PARAM,
+    "os.Args": COMMAND_LINE_ARG,
+    "os.Getenv": ENVIRONMENT_VARIABLE,
 }
 
 _CSHARP_SINKS: Tuple[GenericSink, ...] = (
@@ -637,14 +654,14 @@ _CSHARP_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _CSHARP_SOURCES: Dict[str, str] = {
-    "Request.QueryString": "tham số truy vấn HTTP",
-    "Request.Form": "trường form HTTP",
-    "Request.Params": "tham số của request HTTP",
-    "Request.Headers": "header HTTP",
-    "Request.Cookies": "cookie HTTP",
-    "Request.Body": "body của request HTTP",
-    "Request.Query": "tham số truy vấn HTTP",
-    "Environment.GetEnvironmentVariable": "biến môi trường",
+    "Request.QueryString": QUERY_PARAM,
+    "Request.Form": FORM_FIELD,
+    "Request.Params": REQUEST_PARAM,
+    "Request.Headers": HTTP_HEADER,
+    "Request.Cookies": HTTP_COOKIE,
+    "Request.Body": REQUEST_BODY,
+    "Request.Query": QUERY_PARAM,
+    "Environment.GetEnvironmentVariable": ENVIRONMENT_VARIABLE,
 }
 
 _SHELL_SINKS: Tuple[GenericSink, ...] = (
@@ -666,16 +683,16 @@ _SHELL_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _SHELL_SOURCES: Dict[str, str] = {
-    "$1": "tham số dòng lệnh",
-    "$2": "tham số dòng lệnh",
-    "$3": "tham số dòng lệnh",
-    "$4": "tham số dòng lệnh",
-    "$5": "tham số dòng lệnh",
-    "$@": "tham số dòng lệnh",
-    "$*": "tham số dòng lệnh",
-    "$REPLY": "luồng nhập chuẩn",
-    "$QUERY_STRING": "query string HTTP",
-    "$HTTP_USER_AGENT": "header HTTP",
+    "$1": COMMAND_LINE_ARG,
+    "$2": COMMAND_LINE_ARG,
+    "$3": COMMAND_LINE_ARG,
+    "$4": COMMAND_LINE_ARG,
+    "$5": COMMAND_LINE_ARG,
+    "$@": COMMAND_LINE_ARG,
+    "$*": COMMAND_LINE_ARG,
+    "$REPLY": STANDARD_INPUT,
+    "$QUERY_STRING": QUERY_STRING,
+    "$HTTP_USER_AGENT": HTTP_HEADER,
     "$GITHUB_HEAD_REF": "tham chiếu CI không tin cậy",
     "$GITHUB_EVENT_NAME": "đầu vào CI không tin cậy",
 }

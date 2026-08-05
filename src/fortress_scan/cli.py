@@ -288,25 +288,26 @@ def _emit(result: ScanResult, args: argparse.Namespace, output_path: Optional[Pa
     sys.stderr.write("fortress-scan: đã ghi báo cáo vào %s\n" % output_path)
 
 
-def _resolve_config(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
+def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
+    """Nạp tệp cấu hình, kèm cảnh báo nếu nó tự tìm thấy trong cây bị quét."""
     config = Config()
-    notices: Tuple[str, ...] = ()
-    if not args.no_config:
-        source: Optional[Path] = None
-        chosen_by_user = False
-        if args.config:
-            source = Path(args.config)
-            chosen_by_user = True
-            if not source.is_file():
-                raise ConfigError("không tìm thấy tệp cấu hình: %s" % args.config)
-        else:
-            target = Path(args.target)
-            source = find_config_file(target if target.exists() else Path("."))
-        if source is not None:
-            data = load_config_file(source)
-            config = build_config(data, config)
-            if not chosen_by_user:
-                notices = _project_config_notices(source, data)
+    if args.no_config:
+        return config, ()
+    if args.config:
+        source = Path(args.config)
+        if not source.is_file():
+            raise ConfigError("không tìm thấy tệp cấu hình: %s" % args.config)
+        return build_config(load_config_file(source), config), ()
+    target = Path(args.target)
+    source = find_config_file(target if target.exists() else Path("."))
+    if source is None:
+        return config, ()
+    data = load_config_file(source)
+    return build_config(data, config), _project_config_notices(source, data)
+
+
+def _resolve_config(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
+    config, notices = _config_from_file(args)
 
     known = {rule.id for rule in all_rules()}
     disabled = tuple(item.strip().upper() for item in args.disable)

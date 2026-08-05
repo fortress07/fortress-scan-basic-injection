@@ -152,6 +152,73 @@ Hai thư mục trên có **cùng chức năng**, chỉ khác ở chỗ một bê
 
 ---
 
+## Cách hoạt động
+
+### Khi bạn cài, máy bạn nhận được gì
+
+`pip install -e .` chỉ đăng ký gói Python này vào môi trường của bạn và tạo hai lệnh gõ tắt
+(`fortress-scan`, `fscan`). Không có script cài đặt nào của riêng công cụ chạy kèm, **không tải gì
+từ mạng**, và **không có phụ thuộc ngoài** — toàn bộ 21 module đều nằm trong thư viện chuẩn Python.
+Gỡ ra bằng `pip uninstall` là sạch.
+
+### Khi bạn gõ lệnh quét, sáu bước xảy ra
+
+```
+mã nguồn của bạn
+      │
+  ┌───▼──────────────┐
+  │ 1. khoá tiến trình│  vá socket, subprocess, os.system... → dù có lỗi
+  └───┬──────────────┘     cũng không chạy được mã bạn quét, không gọi mạng
+  ┌───▼──────────────┐
+  │ 2. tìm tệp       │  bỏ thư mục loại trừ, tệp nhị phân, tệp quá lớn;
+  └───┬──────────────┘     không đi theo liên kết trỏ ra ngoài thư mục đích
+  ┌───▼──────────────┐
+  │ 3. đọc & giải mã │  Python giải mã đúng theo khai báo `# coding:` (PEP 263)
+  └───┬──────────────┘     để thấy đúng thứ CPython sẽ chạy
+  ┌───▼──────────────┐
+  │ 4. phân tích     │  truy vết đường đi của dữ liệu (xem phần dưới)
+  └───┬──────────────┘
+  ┌───▼──────────────┐
+  │ 5. lọc           │  chú thích tắt cảnh báo → ngưỡng mức độ/độ tin cậy →
+  └───┬──────────────┘     rule bị tắt → sắp xếp → baseline
+  ┌───▼──────────────┐
+  │ 6. báo cáo       │  console / JSON / SARIF / Markdown + mã thoát
+  └──────────────────┘
+```
+
+Bước 1 là thật, không phải lời hứa: công cụ **vá đè** `socket`, `subprocess`, `os.system`, `os.fork`…
+ngay khi khởi động, nên mọi nỗ lực gọi mạng hay tạo tiến trình đều ném lỗi. Đây là lý do bạn có thể
+trỏ nó vào mã lạ mà không cần sandbox riêng.
+
+### Nó "hiểu" mã như thế nào — truy vết đường đi của dữ liệu
+
+Công cụ **không dò từ khoá**. Nó dựng lại đường đi của dữ liệu từ nơi vào đến nơi phát nổ:
+
+- **Nguồn** — chỗ dữ liệu người ngoài đi vào: `request.args.get()`, `$_GET`, `req.query`, `input()`…
+- **Lan truyền** — dữ liệu bẩn chảy qua phép gán, nối chuỗi, f-string, phần tử trong list/dict, và
+  qua **lời gọi hàm khác trong cùng tệp** (công cụ tự tóm tắt hàm bạn viết rồi dùng lại).
+- **Vô hiệu hoá** — nếu trên đường đi có hàm khử (`shlex.quote`, `html.escape`, tham số hoá truy vấn)
+  hoặc một phép kiểm tra danh sách trắng (`if x in ALLOWED`, `==` hằng, `isinstance`, `re.fullmatch`),
+  dấu vết bẩn được xoá đúng theo loại lỗ hổng mà hàm đó khử được.
+- **Sink** — API nguy hiểm: `os.system`, `cursor.execute`, `eval`, `from_string`…
+
+Chỉ khi dữ liệu bẩn **tới được sink mà chưa bị vô hiệu hoá** thì mới thành một phát hiện — và báo cáo
+in ra **cả đường đi** để bạn tự kiểm chứng, chứ không bắt bạn tin.
+
+Có hai bộ phân tích:
+
+| | Python | Các ngôn ngữ còn lại |
+| --- | --- | --- |
+| Cách đọc mã | dựng cây cú pháp đầy đủ (AST) | tách token bằng lexer riêng cho từng ngôn ngữ |
+| Theo dữ liệu | qua nhánh `if`, vòng lặp, `try`, và qua hàm khác cùng tệp | trong phạm vi một hàm |
+| Kết quả | sâu nhất, đủ 23/27 rule | bắt được dạng "nguồn → biến → sink" |
+
+Rẽ nhánh thì hai nhánh được **gộp lại** (bẩn ở một nhánh là đủ để cảnh báo), vòng lặp chỉ chạy vài
+vòng rồi dừng, và mỗi tệp có **ngân sách** số node/token — nên một tệp dựng riêng để làm treo công cụ
+sẽ bị cắt chứ không kéo cả lần quét đi theo.
+
+---
+
 ## ⚠️ Giới hạn — xin đọc kỹ trước khi tin kết quả
 
 > ### Công cụ đưa ra **GỢI Ý**, không phải phán quyết
