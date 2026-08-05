@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 import os
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List, Optional, Set, Tuple
 
-from ..languages import detect_language, is_scannable_name
+from ..languages import PYTHON, detect_language, is_scannable_name
 from ..security import paths as safe_paths
 from .config import Config
 from .ignore import IgnoreSet
@@ -15,6 +17,7 @@ IGNORE_FILENAMES: Tuple[str, ...] = (".fortress-scanignore",)
 VCS_IGNORE_FILENAMES: Tuple[str, ...] = (".gitignore",)
 
 _BINARY_PROBE_BYTES = 8192
+_MAX_STRAY_NULL_BYTES = 4
 
 
 @dataclass(frozen=True)
@@ -222,25 +225,75 @@ class Discovery:
             return None
         if _looks_binary(path):
             self.skipped += 1
+            # Bỏ qua thì được, nhưng bỏ qua trong im lặng thì không: tệp này
+            # mang phần mở rộng của một ngôn ngữ được hỗ trợ, nên người đọc
+            # báo cáo phải biết là nó chưa từng được soi.
+            self.errors.append(
+                ScanError(
+                    path=relative,
+                    reason="binary-skipped",
+                    detail="tệp %s chứa dữ liệu nhị phân nên không được phân tích" % language,
+                )
+            )
             return None
         return DiscoveredFile(path=path, relative=relative, language=language, size=size)
 
 
 def _looks_binary(path: Path) -> bool:
+    """Chỉ tệp có phần mở rộng của một ngôn ngữ mới đi tới đây, nên "nhị phân"
+    ở đây nghĩa là UTF-16 hoặc một khối dữ liệu bị đặt nhầm tên.
+
+    Một byte NUL lẻ thì không đủ để kết luận: nhét đúng một byte đó vào chuỗi
+    là đủ khiến cả tệp biến mất khỏi lần quét, trong khi Node, PHP hay trình
+    thông dịch vẫn chạy tệp bình thường. Những thứ thật sự nhị phân có NUL
+    dày đặc chứ không phải một hai byte.
+    """
     try:
         with open(path, "rb") as handle:
             probe = handle.read(_BINARY_PROBE_BYTES)
     except OSError:
         return True
-    return b"\x00" in probe
+    return probe.count(b"\x00") > _MAX_STRAY_NULL_BYTES
 
 
-def read_source(path: Path) -> Tuple[str, bool]:
+def declared_python_encoding(raw: bytes) -> Optional[str]:
+    """Cách CPython chọn bảng mã cho một tệp .py (PEP 263), hoặc None nếu tệp
+    khai báo một bảng mã mà chính CPython cũng từ chối."""
+    try:
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+    except SyntaxError:
+        return None
+    return encoding
+
+
+def read_source(path: Path, language: Optional[str] = None) -> Tuple[str, bool]:
     with open(path, "rb") as handle:
         raw = handle.read()
+    if language == PYTHON:
+        return _decode_python(raw)
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
     try:
         return raw.decode("utf-8"), False
     except UnicodeDecodeError:
         return raw.decode("utf-8", errors="replace"), True
+
+
+def _decode_python(raw: bytes) -> Tuple[str, bool]:
+    """Giải mã đúng như CPython sẽ làm khi chạy tệp này.
+
+    Đọc cứng UTF-8 là một lỗ hổng thật: một tệp khai báo `# coding: utf-7` bị
+    CPython đọc ra mã hoàn toàn khác với những gì đọc theo UTF-8 -- `+AAo-`
+    trong UTF-7 là một dấu xuống dòng, nên thứ trông như một dòng chú thích
+    lại là mã chạy được. Phân tích sai bản giải mã thì sink thật không bao giờ
+    lọt vào AST.
+    """
+    encoding = declared_python_encoding(raw)
+    if encoding is not None:
+        try:
+            return raw.decode(encoding), False
+        except (LookupError, ValueError):  # ValueError bao cả UnicodeDecodeError
+            pass
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    return raw.decode("utf-8", errors="replace"), True

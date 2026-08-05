@@ -127,7 +127,7 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
     outcome.language = discovered.language
     outcome.size = discovered.size
     try:
-        source, degraded = read_source(discovered.path)
+        source, degraded = read_source(discovered.path, discovered.language)
     except OSError as exc:
         outcome.error = ScanError(
             path=discovered.relative, reason="unreadable-file", detail=exc.strerror or ""

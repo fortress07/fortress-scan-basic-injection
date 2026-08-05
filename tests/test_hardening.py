@@ -184,9 +184,29 @@ def test_scan_skips_oversized_files(tmp_path: Path):
 
 def test_scan_skips_binary_files(tmp_path: Path):
     binary = tmp_path / "blob.py"
-    binary.write_bytes(b"import os\x00\x01\x02os.system('ls')")
+    binary.write_bytes(b"import os" + bytes(64) + b"os.system('ls')")
     result = scan(str(tmp_path), Config())
     assert result.stats.files_analyzed == 0
+    # Bỏ qua thì được, nhưng phải nói ra: im lặng thì người đọc báo cáo tưởng
+    # tệp đó đã được soi và sạch.
+    assert any(error.reason == "binary-skipped" for error in result.errors)
+
+
+def test_a_stray_null_byte_does_not_hide_a_file(tmp_path: Path):
+    """Một byte NUL lẻ không biến tệp thành nhị phân.
+
+    Node và PHP vẫn chạy tệp có NUL trong chuỗi, nên nếu chỉ một byte đó đủ
+    làm tệp biến mất khỏi lần quét thì đó là một đường né hoàn chỉnh.
+    """
+    payload = tmp_path / "app.js"
+    payload.write_bytes(
+        b"const cp = require('child_process');\n"
+        b"const pad = '\x00';\n"
+        b"function h(req){ const host = req.query.host; cp.exec('ping ' + host); }\n"
+    )
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 1
+    assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
 
 
 def test_symlink_outside_root_is_not_followed(tmp_path: Path):
