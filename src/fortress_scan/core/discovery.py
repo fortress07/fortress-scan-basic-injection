@@ -17,6 +17,7 @@ IGNORE_FILENAMES: Tuple[str, ...] = (".fortress-scanignore",)
 VCS_IGNORE_FILENAMES: Tuple[str, ...] = (".gitignore",)
 
 _BINARY_PROBE_BYTES = 8192
+_MAX_STRAY_NULL_BYTES = 4
 
 
 @dataclass(frozen=True)
@@ -224,17 +225,35 @@ class Discovery:
             return None
         if _looks_binary(path):
             self.skipped += 1
+            # Bỏ qua thì được, nhưng bỏ qua trong im lặng thì không: tệp này
+            # mang phần mở rộng của một ngôn ngữ được hỗ trợ, nên người đọc
+            # báo cáo phải biết là nó chưa từng được soi.
+            self.errors.append(
+                ScanError(
+                    path=relative,
+                    reason="binary-skipped",
+                    detail="tệp %s chứa dữ liệu nhị phân nên không được phân tích" % language,
+                )
+            )
             return None
         return DiscoveredFile(path=path, relative=relative, language=language, size=size)
 
 
 def _looks_binary(path: Path) -> bool:
+    """Chỉ tệp có phần mở rộng của một ngôn ngữ mới đi tới đây, nên "nhị phân"
+    ở đây nghĩa là UTF-16 hoặc một khối dữ liệu bị đặt nhầm tên.
+
+    Một byte NUL lẻ thì không đủ để kết luận: nhét đúng một byte đó vào chuỗi
+    là đủ khiến cả tệp biến mất khỏi lần quét, trong khi Node, PHP hay trình
+    thông dịch vẫn chạy tệp bình thường. Những thứ thật sự nhị phân có NUL
+    dày đặc chứ không phải một hai byte.
+    """
     try:
         with open(path, "rb") as handle:
             probe = handle.read(_BINARY_PROBE_BYTES)
     except OSError:
         return True
-    return b"\x00" in probe
+    return probe.count(b"\x00") > _MAX_STRAY_NULL_BYTES
 
 
 def declared_python_encoding(raw: bytes) -> Optional[str]:
