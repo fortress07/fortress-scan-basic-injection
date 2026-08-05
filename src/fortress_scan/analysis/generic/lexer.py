@@ -213,6 +213,17 @@ class Tokenizer:
                 pieces.append(self._source[cursor + 1])
                 cursor += 2
                 continue
+            if interpolating and not raw:
+                # Vùng nội suy là mã, nên nó có thể chứa một chuỗi lồng dùng
+                # đúng dấu nháy đang mở: `outer ${`inner`} end`. Nhảy qua trọn
+                # vùng đó, nếu không thì dấu nháy mở của chuỗi lồng bị hiểu là
+                # dấu đóng của chuỗi ngoài, và phần ruột chuỗi rơi ra ngoài
+                # thành mã.
+                span = self._interpolation_span(cursor)
+                if span != -1:
+                    pieces.append(self._source[cursor:span])
+                    cursor = span
+                    continue
             if current == char:
                 cursor += 1
                 break
@@ -227,6 +238,65 @@ class Tokenizer:
         self._index = cursor
         self._column = 1
         return True
+
+    def _skip_quoted(self, index: int) -> int:
+        """Bỏ qua một chuỗi lồng nằm bên trong vùng nội suy."""
+        quote = self._source[index]
+        cursor = index + 1
+        escape = self._profile.escape_character
+        while cursor < self._length:
+            char = self._source[cursor]
+            if char == escape and cursor + 1 < self._length:
+                cursor += 2
+                continue
+            if char == quote:
+                return cursor + 1
+            cursor += 1
+        return cursor
+
+    def _interpolation_span(self, index: int) -> int:
+        """Chỉ số ngay sau dấu đóng khớp của vùng nội suy bắt đầu tại index.
+
+        Trả về -1 nếu ở đây không mở vùng nội suy nào, hoặc vùng đó không đóng
+        lại -- khi đó phần còn lại được đọc như thân chuỗi bình thường.
+        """
+        profile = self._profile
+        quotes = (
+            tuple(profile.plain_quotes)
+            + tuple(profile.interpolating_quotes)
+            + tuple(profile.raw_quotes)
+        )
+        for opener, closer in profile.interpolation_markers:
+            if self._source.startswith(opener, index):
+                return self._scan_to_closer(index + len(opener), opener, closer, quotes)
+        return -1
+
+    def _scan_to_closer(
+        self, cursor: int, opener: str, closer: str, quotes: Tuple[str, ...]
+    ) -> int:
+        depth = 1
+        escape = self._profile.escape_character
+        while cursor < self._length:
+            self._budget.spend()
+            char = self._source[cursor]
+            if char == escape and cursor + 1 < self._length:
+                cursor += 2
+                continue
+            if char in quotes:
+                cursor = self._skip_quoted(cursor)
+                continue
+            if self._source.startswith(opener, cursor):
+                depth += 1
+                cursor += len(opener)
+                continue
+            if char == closer:
+                depth -= 1
+                cursor += 1
+                if depth == 0:
+                    return cursor
+                continue
+            cursor += 1
+        return -1
 
     def _scan_interpolations(self, body: str) -> None:
         if self._depth >= _MAX_INTERPOLATION_DEPTH:
