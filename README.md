@@ -1,4 +1,4 @@
-# Fortress Scan — Basic Injection
+# Fortress Scan Basic Injection
 
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
@@ -29,17 +29,17 @@ app/routes.py
           dòng 42  chạy tới cursor.execute()
 ```
 
-**27 rule, phủ 12 họ injection:** SQL · NoSQL · LDAP · XPath · OS command · code injection
-(`eval`/`exec`) · template (SSTI) · expression language · XSS · XXE · file inclusion · reflection.
+**27 rule, phủ 12 họ injection:** SQL, NoSQL, LDAP, XPath, OS command, code injection
+(`eval`/`exec`), template (SSTI), expression language, XSS, XXE, file inclusion, reflection.
 Kèm 3 nhóm liên quan: giải tuần tự không an toàn, Trojan Source / ký tự ẩn, và script cài đặt tải mã
 từ xa về chạy.
 
-**Ngôn ngữ:** Python (sâu nhất), JavaScript, TypeScript, PHP, Java/JVM, Ruby, Go, C#, shell và
+**Ngôn ngữ:** Python ( sâu nhất ), JavaScript, TypeScript, PHP, Java/JVM, Ruby, Go, C#, shell và
 `package.json`.
 
 Xem đầy đủ: `python -m fortress_scan --list-rules`
 
-### Quét được những lỗ hổng nào ? ( đọc kĩ nhé vì còn một vài vuln chưa được cập nhật)
+### Quét được những lỗ hổng nào ? ( đọc kĩ nhé vì còn một vài vuln chưa được cập nhật )
 
 Mỗi rule dưới đây đều có **mẫu mã nguồn thật làm nó active** và ( với đa số ) **một mẫu an toàn tương ứng
 để chắc nó không kêu bừa**, chạy tự động trong `tests/test_rule_coverage.py`. Có test bắt buộc mọi
@@ -110,7 +110,7 @@ kiểm tra bằng tay.
 Đây là **dự án cá nhân**, viết ra vì mong muốn anh em dev Việt Nam có một công cụ **tiếng Việt** để
 soi lại code **trước khi đưa lên production**.
 
-Nó tồn tại như **một lớp tham khảo thêm** bên cạnh việc tự review hoặc phải dùng AI agent để scan lại ( tốn token ), không cần cấu hình,
+Nó tồn tại như **một lớp tham khảo thêm** bên cạnh việc tự review hoặc phải tìm một người khác pentest hoặc thậm chí phải dùng AI agent để scan lại ( làm tốn token quý giá của anh em ), không cần cấu hình,
 chỉ ra chỗ đáng ngờ kèm đường đi của dữ liệu, rồi phần còn lại toàn quyền xử lý của anh em.
 
 ---
@@ -240,11 +240,11 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 
 | Tình huống trong code của ae | Kết quả |
 | --- | --- |
-| Đặt tên biến/hàm bằng tiếng Việt, Trung, Nhật (kể cả có dấu) | ✅ Không ảnh hưởng gì |
-| Đổi tên thư viện — `import os as he_dieu_hanh` | ✅ Vẫn bắt được |
-| Gán sink vào biến rồi gọi — `chay = os.system; chay(cmd)` | ✅ Vẫn bắt được |
-| Sink nằm trong bảng điều phối / danh sách — `handlers["run"](cmd)` | ✅ Vẫn bắt được |
-| Gọi qua `getattr` với tên hằng — `getattr(os, "system")(cmd)` | ✅ Vẫn bắt được |
+| Đặt tên biến/hàm bằng tiếng Việt, Trung, Nhật ( kể cả có dấu ) | ✅ Không ảnh hưởng gì |
+| Đổi tên thư viện - `import os as he_dieu_hanh` | ✅ Vẫn bắt được |
+| Gán sink vào biến rồi gọi - `chay = os.system; chay(cmd)` | ✅ Vẫn bắt được |
+| Sink nằm trong bảng điều phối / danh sách - `handlers["run"](cmd)` | ✅ Vẫn bắt được |
+| Gọi qua `getattr` với tên hằng - `getattr(os, "system")(cmd)` | ✅ Vẫn bắt được |
 | Hàm bọc / tầng CSDL tự viết, **cùng tệp** | ✅ Tự học được, mức critical |
 | Hàm bọc / tầng CSDL tự viết, **khác tệp trong dự án** | ⚠️ Chỉ còn mức medium, và báo ở file wrapper chứ không phải chỗ gọi |
 | Framework hoặc helper lấy input tự viết mà công cụ chưa biết | ⚠️ Chỉ còn mức medium |
@@ -256,18 +256,18 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 
 - **Chỉ phân tích trong phạm vi một tệp** - nguồn ở `a.py` chạy tới sink ở `b.py` qua `import` thì
   chưa nối được.
-- **Ngoài Python là phân tích theo token**, không phải parser đầy đủ — độ bao phủ thấp hơn, và giá
+- **Ngoài Python là phân tích theo token**, không phải parser đầy đủ - độ bao phủ thấp hơn, và giá
   trị "độ tin cậy" trong báo cáo phản ánh đúng điều đó.
 - **Không theo được dữ liệu lưu vào thuộc tính đối tượng**, và không phát hiện **injection bậc hai**
   (dữ liệu bẩn ghi vào CSDL rồi đọc ra dùng lại).
-- **Kiểu viết trên nhiều dòng hoặc có `;` bên trong kiểu dữ liệu thì chưa tách câu lệnh đúng** —
+- **Kiểu viết trên nhiều dòng hoặc có `;` bên trong kiểu dữ liệu thì chưa tách câu lệnh đúng** -
   ví dụ TypeScript `const o: {a: string; b: number} = nguon_ng` bị cắt câu ngay dấu `;`, nên chỉ
   còn cảnh báo mức medium.
 - **Chưa hỗ trợ:** CRLF/header injection, log injection, path traversal, SSRF, open redirect,
   prototype pollution, ReDoS, lỗi logic nghiệp vụ.
 - Sẽ có **báo nhầm** và **bỏ sót** - phân tích tĩnh vốn không đầy
   đủ. Công cụ **bổ sung** cho code review, quét phụ thuộc và kiểm thử động, **không thay thế** cái
-  nào cả.
+  nào hết.
 
 ### 🖥️ Nền tảng
 
@@ -276,7 +276,7 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 **Trên Linux và macOS: tác giả chưa chạy thử thực tế.** Mã nguồn viết theo hướng đa nền tảng và 
 nhiều khả năng chạy bình thường, nhưng **chưa có bằng chứng thực nghiệm** - nếu anh em nào có dùng
 Linux/macOS xin coi đây là phiên bản thử nghiệm 
-( sắp tới mình sẽ qua nghiên cứu bên Linux để kiểm tra kĩ hơn ).
+( sắp tới mình sẽ qua research bên Linux để kiểm tra kĩ hơn ).
 
 ### Khi quét mã không đáng tin
 
@@ -309,13 +309,13 @@ khi đọc mã lạ:
 | `# fortress-scan: ignore-file` | **toàn bộ tệp** |
 
 Giới hạn theo rule bằng `# fortress-scan: ignore [FSB-CMD-001]`. Chú thích dùng được với `#`, `//`,
-`/*`, `--` và `<!--`. Chỉ thị **nằm trong chuỗi không được tính** — `HELP = "# fortress-scan:
+`/*`, `--` và `<!--`. Chỉ thị **nằm trong chuỗi không được tính** - `HELP = "# fortress-scan:
 ignore-file"` chỉ là dữ liệu, không tắt gì hết.
 
-Nếu ae quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi (tắt rule, loại trừ
-đường dẫn, nâng ngưỡng, hạ giới hạn kích thước…), công cụ **in cảnh báo ra stderr và nói rõ nó đã tắt
+Nếu ae quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi ( tắt rule, loại trừ
+đường dẫn, nâng ngưỡng, hạ giới hạn kích thước… ), công cụ **in cảnh báo ra stderr và nói rõ nó đã tắt
 những gì**. Một báo cáo "sạch" sinh ra từ cấu hình của người khác sẽ không im lặng nữa. Cảnh báo đi
-ra stderr nên không lẫn vào báo cáo JSON/SARIF khi bạn chuyển hướng stdout.
+ra stderr nên không lẫn vào báo cáo JSON/SARIF khi anh em chuyển hướng stdout.
 
 ---
 
