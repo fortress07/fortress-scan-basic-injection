@@ -90,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--exit-zero", action="store_true", help="luôn thoát 0 kể cả khi có phát hiện"
     )
     selection.add_argument(
+        "--fail-on-coverage-reduction",
+        action="store_true",
+        help="thoát khác 0 nếu có thứ gì làm hẹp phạm vi quét (cấu hình trong cây, liên kết bị bỏ)",
+    )
+    selection.add_argument(
         "--disable", metavar="RULE", action="append", default=[], help="tắt một rule theo mã"
     )
     selection.add_argument(
@@ -270,6 +275,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.exit_zero:
         return EXIT_CLEAN
+    # Kiểm trước cả ngưỡng mức độ: một lượt quét bị bóp hẹp thì con số "không
+    # có phát hiện nào" chưa nói lên được điều gì.
+    if args.fail_on_coverage_reduction and result.notices:
+        return EXIT_FINDINGS
     highest = result.highest_severity()
     if highest is not None and highest >= config.fail_on:
         return EXIT_FINDINGS
