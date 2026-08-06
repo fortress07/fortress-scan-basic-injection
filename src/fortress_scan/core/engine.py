@@ -58,9 +58,27 @@ def scan(
         findings.extend(outcome.findings)
 
     stats.files_skipped = discovery.skipped + (len(discovered) - stats.files_analyzed)
+    stats.directories_excluded = discovery.excluded_directories_hit
 
     # Bỏ qua liên kết là hành vi mặc định và đúng, nhưng nó vẫn là một mảng mã
     # chưa từng được soi. Nói ra, đừng để người đọc tự đoán từ một con số.
+    # Cùng loại với cảnh báo của .fortress-scan.json: quy tắc do người viết cây
+    # thư mục đặt, và nó gỡ mã khỏi lượt quét.
+    if discovery.ignored_files or discovery.ignored_directories:
+        coverage_notices.append(
+            ScanNotice(
+                kind="ignore-files-applied",
+                summary=(
+                    "tệp bỏ qua trong cây được quét (.gitignore / .fortress-scanignore) "
+                    "đã gỡ %d tệp mã nguồn và %d thư mục khỏi lượt quét"
+                    % (discovery.ignored_files, discovery.ignored_directories)
+                ),
+                details=(
+                    "chạy lại với --no-vcs-ignore --no-ignore-files nếu không tin cây này",
+                ),
+            )
+        )
+
     if discovery.skipped_links:
         coverage_notices.append(
             ScanNotice(
@@ -189,6 +207,15 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
     outcome.analyzed = True
     if config.honor_inline_suppressions:
         index = suppression_module.SuppressionIndex.from_lines(unit.lines)
+        if index.overflowed and outcome.error is None:
+            outcome.error = ScanError(
+                path=discovered.relative,
+                reason="suppression-scan-too-complex",
+                detail=(
+                    "vượt hạn mức dò chú thích nên mọi chỉ thị fortress-scan: ignore "
+                    "trong tệp này bị bỏ; không phát hiện nào bị ẩn"
+                ),
+            )
         findings, outcome.suppressed = suppression_module.partition(findings, index)
     outcome.findings = findings
     return outcome
