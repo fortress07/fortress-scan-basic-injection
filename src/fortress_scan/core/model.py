@@ -188,6 +188,25 @@ class ScanError:
 
 
 @dataclass
+class ScanNotice:
+    """Một thứ đã làm hẹp phạm vi quét so với mặc định.
+
+    Khác `ScanError` ở chỗ không có gì hỏng cả: lượt quét chạy đúng như được
+    yêu cầu, chỉ là nó đã nhìn ít hơn -- vì tệp cấu hình trong cây được quét,
+    vì liên kết bị bỏ qua, vì ngưỡng bị nâng lên. Một báo cáo "sạch" sinh ra
+    từ những thứ đó phải nói được vì sao nó sạch, và phải nói ở MỌI định dạng
+    chứ không riêng màn hình -- người đọc JSON hay SARIF cũng cần biết.
+    """
+
+    kind: str
+    summary: str
+    details: Tuple[str, ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"kind": self.kind, "summary": self.summary, "details": list(self.details)}
+
+
+@dataclass
 class ScanStats:
     files_discovered: int = 0
     files_analyzed: int = 0
@@ -212,6 +231,7 @@ class ScanResult:
     root: str
     findings: List[Finding] = field(default_factory=list)
     errors: List[ScanError] = field(default_factory=list)
+    notices: List[ScanNotice] = field(default_factory=list)
     stats: ScanStats = field(default_factory=ScanStats)
     suppressed: int = 0
     baselined: int = 0
@@ -232,6 +252,7 @@ class ScanResult:
             "root": self.root.replace("\\", "/"),
             "findings": [finding.to_dict() for finding in self.findings],
             "errors": [error.to_dict() for error in self.errors],
+            "notices": [notice.to_dict() for notice in self.notices],
             "stats": self.stats.to_dict(),
             "summary": {
                 "total": len(self.findings),
