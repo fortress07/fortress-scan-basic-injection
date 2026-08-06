@@ -15,7 +15,7 @@ from . import baseline as baseline_module
 from . import suppression as suppression_module
 from .budget import Budget, BudgetExceeded
 from .config import Config
-from .discovery import Discovery, DiscoveredFile, read_source
+from .discovery import Discovery, DiscoveredFile, FileChangedDuringScan, read_source
 from .model import Finding, ScanError, ScanNotice, ScanResult, ScanStats
 
 _PYTHON_ANALYZER = PythonAnalyzer()
@@ -145,7 +145,16 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
     outcome.language = discovered.language
     outcome.size = discovered.size
     try:
-        source, degraded = read_source(discovered.path, discovered.language)
+        source, degraded = read_source(
+            discovered.path, discovered.language, discovered.identity
+        )
+    except FileChangedDuringScan:
+        outcome.error = ScanError(
+            path=discovered.relative,
+            reason="file-changed-during-scan",
+            detail="tệp bị thay thế sau khi được liệt kê nên không được phân tích",
+        )
+        return outcome
     except OSError as exc:
         outcome.error = ScanError(
             path=discovered.relative, reason="unreadable-file", detail=exc.strerror or ""

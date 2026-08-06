@@ -12,7 +12,7 @@ from fortress_scan.core import baseline
 from fortress_scan.core import discovery as discovery_module
 from fortress_scan.core.budget import Budget, BudgetExceeded
 from fortress_scan.core.config import Config, ConfigError, build_config
-from fortress_scan.core.discovery import Discovery
+from fortress_scan.core.discovery import Discovery, FileChangedDuringScan, read_source
 from fortress_scan.core.engine import scan, scan_source
 from fortress_scan.core.ignore import IgnoreSet
 from fortress_scan.core.model import ScanNotice
@@ -410,6 +410,45 @@ def test_coverage_reduction_reaches_every_report_format(tmp_path: Path, capsys):
 
     ConsoleReporter(sys.stdout, color=False).render(result)
     assert "đã thu hẹp" in capsys.readouterr().out
+
+
+def test_file_swapped_after_discovery_is_not_analysed(tmp_path: Path):
+    """Tệp bị tráo giữa lúc liệt kê và lúc mở thì không được phân tích.
+
+    Ai ghi được vào cây đang bị quét có thể lợi dụng khoảng trống đó để đẩy
+    một nội dung khác vào phần phân tích - và vào trích đoạn in ra báo cáo.
+    Kiểm trên `fstat` của handle đã mở, không kiểm lại đường dẫn.
+    """
+    target = tmp_path / "app.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    status = target.stat()
+    honest = (status.st_dev, status.st_ino)
+
+    source, _ = read_source(target, PYTHON, honest)
+    assert "value = 1" in source
+
+    # Cùng đường dẫn, nhưng đã là một tệp khác trên đĩa.
+    target.unlink()
+    target.write_text("import os\nos.system(input())\n", encoding="utf-8")
+    replaced = target.stat()
+    if (replaced.st_dev, replaced.st_ino) == honest:
+        pytest.skip("hệ thống tệp cấp lại đúng inode cũ nên không dựng được kịch bản")
+
+    with pytest.raises(FileChangedDuringScan):
+        read_source(target, PYTHON, honest)
+
+
+def test_coverage_reduction_can_gate_the_exit_code(tmp_path: Path):
+    """Mặc định vẫn thoát 0; chỉ khi bật cờ mới chặn được pipeline."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"min_severity": "critical"}), encoding="utf-8"
+    )
+
+    assert cli.main([str(tmp_path), "--quiet"]) == 0
+    assert cli.main([str(tmp_path), "--quiet", "--fail-on-coverage-reduction"]) == 1
+    # Không có gì làm hẹp phạm vi thì cờ này phải im lặng.
+    assert cli.main([str(tmp_path), "--quiet", "--no-config", "--fail-on-coverage-reduction"]) == 0
 
 
 def test_skipped_links_are_reported_not_just_counted(tmp_path: Path):

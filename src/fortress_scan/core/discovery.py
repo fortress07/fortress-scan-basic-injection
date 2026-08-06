@@ -20,12 +20,17 @@ _BINARY_PROBE_BYTES = 8192
 _MAX_STRAY_NULL_BYTES = 4
 
 
+class FileChangedDuringScan(Exception):
+    """Tệp mở ra không còn là tệp đã được liệt kê lúc duyệt cây."""
+
+
 @dataclass(frozen=True)
 class DiscoveredFile:
     path: Path
     relative: str
     language: str
     size: int
+    identity: Optional[Tuple[int, int]] = None
 
 
 class Discovery:
@@ -277,7 +282,13 @@ class Discovery:
                 )
             )
             return None
-        return DiscoveredFile(path=path, relative=relative, language=language, size=size)
+        return DiscoveredFile(
+            path=path,
+            relative=relative,
+            language=language,
+            size=size,
+            identity=identity,
+        )
 
 
 def _identity(status: os.stat_result) -> Optional[Tuple[int, int]]:
@@ -323,8 +334,23 @@ def declared_python_encoding(raw: bytes) -> Optional[str]:
     return encoding
 
 
-def read_source(path: Path, language: Optional[str] = None) -> Tuple[str, bool]:
+def read_source(
+    path: Path,
+    language: Optional[str] = None,
+    identity: Optional[Tuple[int, int]] = None,
+) -> Tuple[str, bool]:
+    """Đọc tệp, và nếu biết danh tính thì kiểm lại đúng thứ vừa mở ra.
+
+    Giữa lúc liệt kê cây và lúc mở tệp có một khoảng trống. Ai ghi được vào
+    cây đang bị quét có thể tráo tệp trong khoảng đó, khiến công cụ phân tích
+    -- và trích đoạn vào báo cáo -- một nội dung khác hẳn thứ đã được xét
+    duyệt. So `fstat` của chính handle đã mở với danh tính ghi nhận lúc duyệt
+    sẽ đóng khoảng trống đó lại, vì kiểm trên handle chứ không kiểm lại
+    đường dẫn.
+    """
     with open(path, "rb") as handle:
+        if identity is not None and _identity(os.fstat(handle.fileno())) != identity:
+            raise FileChangedDuringScan(str(path))
         raw = handle.read()
     if language == PYTHON:
         return _decode_python(raw)
