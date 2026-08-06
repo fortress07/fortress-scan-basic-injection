@@ -60,3 +60,7 @@ include = ["src", "tests", "README.md", "LICENSE"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Test luôn chạy trên src/ của chính bản sao đang sửa. Thiếu dòng này thì
+# `import fortress_scan` rơi vào bản `pip install -e` đang trỏ đi đâu đó,
+# và cả bộ test xanh mà không hề chạm vào thay đổi vừa viết.
+pythonpath = ["src"]

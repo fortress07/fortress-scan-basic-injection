@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
+from fortress_scan import cli
 from fortress_scan.core import baseline
+from fortress_scan.core import discovery as discovery_module
 from fortress_scan.core.budget import Budget, BudgetExceeded
 from fortress_scan.core.config import Config, ConfigError, build_config
+from fortress_scan.core.discovery import Discovery
 from fortress_scan.core.engine import scan, scan_source
 from fortress_scan.core.ignore import IgnoreSet
+from fortress_scan.core.model import ScanNotice
+from fortress_scan.report import ConsoleReporter, to_json, to_markdown, to_sarif
 from fortress_scan.languages import PYTHON
 from fortress_scan.security import paths as safe_paths
 from fortress_scan.security import runtime as sandbox
@@ -223,6 +229,123 @@ def test_symlink_outside_root_is_not_followed(tmp_path: Path):
     assert result.stats.files_analyzed == 0
     result_following = scan(str(root), Config(follow_symlinks=True))
     assert result_following.stats.files_analyzed == 0
+    # Con số 0 ở trên phải đến từ việc chặn liên kết thoát ra ngoài, chứ không
+    # phải từ việc bỏ sạch mọi liên kết. Không có khẳng định này thì một lỗi
+    # khiến --follow-symlinks không làm gì cả cũng làm test xanh.
+    assert any(error.reason == "link-escapes-root" for error in result_following.errors)
+
+
+def test_scan_is_complete_when_the_filesystem_reports_no_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Hệ thống tệp không cho biết inode thì vẫn phải quét đủ.
+
+    Share mạng, FAT và một số kiểu mount trong container trả về 0 cho
+    st_dev/st_ino. Nếu coi 0 là một danh tính hợp lệ thì mọi entry trùng
+    nhau, lượt quét dừng ngay sau thư mục đầu tiên và không in ra dòng lỗi
+    nào -- một báo cáo "sạch" hoàn toàn rỗng ruột.
+    """
+    for name in ("p", "q", "r", "s"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "vuln.py").write_text(
+            "import os\nos.system(input())\n", encoding="utf-8"
+        )
+
+    assert scan(str(tmp_path), Config()).stats.files_analyzed == 4
+
+    real_stat = os.stat
+
+    def stat_without_identity(path, *args, **kwargs):
+        # Chỉ bỏ inode, giữ nguyên st_dev -- đây mới là hình dạng nguy hiểm.
+        # Khi cả hai cùng bằng 0 thì mã cũ đã nhận ra và bỏ qua việc gộp; khi
+        # riêng inode bằng 0 thì mọi entry mang chung khoá (st_dev, 0).
+        status = real_stat(path, *args, **kwargs)
+        return os.stat_result((status.st_mode, 0, status.st_dev) + tuple(status)[3:])
+
+    monkeypatch.setattr(discovery_module.os, "stat", stat_without_identity)
+    monkeypatch.setattr(Path, "stat", lambda self, **kw: stat_without_identity(self))
+
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 4
+    assert len(result.findings) == 4
+
+
+def test_entry_is_directory_asks_the_target_not_the_link(tmp_path: Path):
+    """Ghim hợp đồng mà `--follow-symlinks` từng vi phạm.
+
+    `is_dir(follow_symlinks=False)` soi lstat của chính liên kết nên LUÔN trả
+    False, kể cả khi liên kết trỏ tới thư mục. Quyết định phải hỏi đích đã
+    phân giải; nếu hỏi chính liên kết thì cả cây con phía sau nó biến mất
+    khỏi lượt quét mà không để lại dấu vết nào.
+
+    Tạo symlink thật cần đặc quyền trên Windows, và junction thì KHÔNG tái
+    hiện được lỗi này (junction trả về True nên đi đúng nhánh kể cả khi code
+    sai), nên hợp đồng được ghim thẳng ở đây để chạy được trên mọi nền tảng.
+    """
+    real_directory = tmp_path / "realdir"
+    real_directory.mkdir()
+    real_file = tmp_path / "real.py"
+    real_file.write_text("value = 1\n", encoding="utf-8")
+
+    class LinkEntry:
+        def is_dir(self, follow_symlinks: bool = True) -> bool:
+            return False
+
+    discovery = Discovery(tmp_path, Config(follow_symlinks=True))
+    link = tmp_path / "link"
+
+    assert discovery._entry_is_directory(LinkEntry(), link, real_directory) is True
+    assert discovery._entry_is_directory(LinkEntry(), link, real_file) is False
+
+
+def test_link_to_file_inside_root_is_followed_when_enabled(tmp_path: Path):
+    (tmp_path / "real.py").write_text(
+        "import os\nos.system(input())\n", encoding="utf-8"
+    )
+    link = tmp_path / "aliased.py"
+    try:
+        link.symlink_to(tmp_path / "real.py")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted in this environment")
+
+    ignored = scan(str(tmp_path), Config())
+    assert ignored.stats.files_analyzed == 1
+    assert {finding.path for finding in ignored.findings} == {"real.py"}
+
+    followed = scan(str(tmp_path), Config(follow_symlinks=True))
+    # Cùng một tệp dưới hai cái tên: đi theo được liên kết, nhưng không quét
+    # hai lần rồi nhân đôi phát hiện.
+    assert followed.stats.files_analyzed == 1
+    assert any(finding.rule_id == "FSB-CMD-001" for finding in followed.findings)
+    # Khẳng định phân biệt được "đã đi theo" với "đã bỏ qua": đếm số tệp thì
+    # hai bên đều ra 1, vì tệp vẫn tới được qua tên thật. Chỉ đường dẫn báo về
+    # mới khác -- "aliased.py" đứng trước "real.py" khi duyệt theo thứ tự tên,
+    # nên nó là đường tới tệp khi liên kết được đi theo.
+    assert {finding.path for finding in followed.findings} == {"aliased.py"}
+
+
+def test_link_to_directory_inside_root_is_followed_when_enabled(tmp_path: Path):
+    """Cây con sau một liên kết thư mục phải được quét.
+
+    Đây là smoke test, không phải chốt chặn hồi quy: khi thư mục thật cũng
+    nằm ngay trong phạm vi quét thì "đi theo liên kết" và "bỏ qua liên kết"
+    cho ra kết quả giống hệt nhau -- tệp vẫn tới được qua đường thật, nên
+    không có con số nào phân biệt được hai hành vi. Chốt chặn thật nằm ở
+    test_entry_is_directory_asks_the_target_not_the_link.
+    """
+    root = tmp_path / "root"
+    (root / "realdir").mkdir(parents=True)
+    (root / "realdir" / "vuln.py").write_text(
+        "import os\nos.system(input())\n", encoding="utf-8"
+    )
+    try:
+        (root / "linkdir").symlink_to(root / "realdir", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted in this environment")
+
+    followed = scan(str(root), Config(follow_symlinks=True))
+    assert followed.stats.files_analyzed == 1
+    assert any(finding.rule_id == "FSB-CMD-001" for finding in followed.findings)
 
 
 def test_excluded_directories_are_not_scanned(tmp_path: Path):
@@ -244,6 +367,69 @@ def test_project_config_from_scanned_tree_is_declarative_only(tmp_path: Path):
     assert found is not None
     data = load_config_file(found)
     assert build_config(data).min_severity.label == "critical"
+
+
+def test_coverage_reduction_reaches_every_report_format(tmp_path: Path, capsys):
+    """Cấu hình trong cây bị quét bóp hẹp lượt quét thì MỌI báo cáo phải nói ra.
+
+    Chỉ ghi cảnh báo ra stderr là chưa đủ: người chạy `-f json -o bao-cao.json`
+    hay đẩy SARIF lên code scanning không đọc stderr. Một repo không hợp tác
+    có thể tự tắt gần hết khả năng phát hiện của công cụ đang quét nó, mà tệp
+    báo cáo cuối cùng vẫn trông sạch bong.
+    """
+    (tmp_path / "app.py").write_text(
+        "import os\nfrom flask import request\n"
+        "def h():\n    os.system('ping ' + request.args.get('h'))\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"disabled_rules": ["FSB-CMD-001"], "min_severity": "critical"}),
+        encoding="utf-8",
+    )
+
+    assert cli.main([str(tmp_path), "--quiet"]) == 0  # cấu hình đã làm báo cáo sạch
+
+    result = scan(
+        str(tmp_path),
+        build_config({"disabled_rules": ["FSB-CMD-001"]}),
+        None,
+        [ScanNotice(kind="project-config", summary="đã thu hẹp", details=("tắt rule",))],
+    )
+    assert not result.findings
+
+    payload = json.loads(to_json(result, "0.0.0"))
+    assert payload["notices"][0]["kind"] == "project-config"
+
+    sarif = json.loads(to_sarif(result, "0.0.0"))
+    notifications = sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+    assert any(item["descriptor"]["id"] == "project-config" for item in notifications)
+
+    markdown = to_markdown(result, "0.0.0")
+    assert "đã thu hẹp" in markdown
+    assert markdown.index("đã thu hẹp") < markdown.index("Không phát hiện")
+
+    ConsoleReporter(sys.stdout, color=False).render(result)
+    assert "đã thu hẹp" in capsys.readouterr().out
+
+
+def test_skipped_links_are_reported_not_just_counted(tmp_path: Path):
+    """Liên kết bị bỏ qua là mã chưa từng được soi -- phải nói ra, không chỉ
+    nằm im trong một con số ở JSON."""
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "v.py").write_text("value = 1\n", encoding="utf-8")
+    try:
+        (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted in this environment")
+
+    result = scan(str(tmp_path), Config())
+    assert any(notice.kind == "links-skipped" for notice in result.notices)
+    assert "links-skipped" in to_markdown(result, "0.0.0") or any(
+        "liên kết" in notice.summary for notice in result.notices
+    )
+
+    followed = scan(str(tmp_path), Config(follow_symlinks=True))
+    assert not any(notice.kind == "links-skipped" for notice in followed.notices)
 
 
 def test_serializer_round_trip_is_not_an_injection():

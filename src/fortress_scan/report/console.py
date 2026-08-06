@@ -93,6 +93,20 @@ class ConsoleReporter:
         if self._verbose and finding.remediation:
             self._write("        %s %s" % (self._paint("khắc phục:", "dim"), finding.remediation))
 
+    def _render_notices(self, result: ScanResult) -> None:
+        """Không giấu sau -v: một báo cáo hẹp đi mà không nói vì sao chính là
+        thứ tạo ra cảm giác an toàn giả."""
+        if not result.notices:
+            return
+        for notice in result.notices:
+            self._write(
+                "  %s %s"
+                % (self._paint(" CẢNH BÁO ", "medium"), neutralize(notice.summary))
+            )
+            for detail in notice.details:
+                self._write("      %s" % self._paint(neutralize(detail), "dim"))
+        self._write()
+
     def _render_summary(self, result: ScanResult) -> None:
         counts = result.counts_by_severity()
         parts = []
@@ -103,6 +117,7 @@ class ConsoleReporter:
         summary = "  ".join(parts) if parts else self._paint("sạch", "good")
         stats = result.stats
         self._write(self._paint("-" * 60, "dim"))
+        self._render_notices(result)
         self._write("  %s" % summary)
         self._write(
             self._paint(
@@ -111,6 +126,10 @@ class ConsoleReporter:
                 "dim",
             )
         )
+        if stats.files_skipped:
+            self._write(
+                self._paint("  %d tệp bị bỏ qua, không được phân tích" % stats.files_skipped, "dim")
+            )
         if result.suppressed or result.baselined:
             self._write(
                 self._paint(
