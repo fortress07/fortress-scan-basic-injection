@@ -412,6 +412,41 @@ def test_coverage_reduction_reaches_every_report_format(tmp_path: Path, capsys):
     assert "đã thu hẹp" in capsys.readouterr().out
 
 
+def test_coverage_notice_cannot_smuggle_terminal_escapes(tmp_path: Path, capsys):
+    """Nội dung .fortress-scan.json đi vào cảnh báo thì phải qua neutralize().
+
+    Cảnh báo thu hẹp phạm vi được dựng bằng cách nội suy thẳng giá trị người
+    khác viết trong tệp cấu hình. Nó ra stderr trên mọi lượt chạy, kể cả
+    --quiet, và ra cả tệp Markdown - hai đường không có json.dumps đỡ hộ. Một
+    repo chỉ cần kèm theo tệp cấu hình là bắn được OSC 52 (ghi clipboard) hay
+    OSC 0 (đổi tiêu đề cửa sổ) vào terminal của người chạy công cụ.
+    """
+    payload = "\x1b]52;c;cHduZWQ=\x07" + "\x1b]0;PWNED\x07"
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"exclude": [payload]}), encoding="utf-8"
+    )
+
+    for arguments in ([str(tmp_path)], [str(tmp_path), "--quiet"]):
+        cli.main(arguments + ["--no-color"])
+        captured = capsys.readouterr()
+        assert "\x1b" not in captured.err and "\x07" not in captured.err
+        assert "\x1b" not in captured.out and "\x07" not in captured.out
+        assert "\\x1b" in captured.err  # vẫn hiện ra, chỉ là đã bị vô hiệu hóa
+
+    cli.main([str(tmp_path), "--no-color", "-f", "markdown"])
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.out and "\x07" not in captured.out
+    assert "\\x1b" in captured.out
+
+    # Tên khóa cũng do tệp cấu hình đặt, và nó đi vào thông báo lỗi.
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"\x1b]0;PWNED\x07": 1}), encoding="utf-8"
+    )
+    assert cli.main([str(tmp_path), "--no-color"]) == 2
+    assert "\x1b" not in capsys.readouterr().err
+
+
 def test_file_swapped_after_discovery_is_not_analysed(tmp_path: Path):
     """Tệp bị tráo giữa lúc liệt kê và lúc mở thì không được phân tích.
 
