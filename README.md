@@ -11,7 +11,7 @@ thư mục dự án, chạy và đọc báo cáo. Giao diện và báo cáo hoà
 
 ## Công cụ này làm gì
 
-Fortress Scan đọc mã nguồn của bro và tìm những chỗ **dữ liệu từ bên ngoài có thể bị hiểu thành mã,
+Fortress Scan đọc mã nguồn của anh em và tìm những chỗ **dữ liệu từ bên ngoài có thể bị hiểu thành mã,
 câu lệnh hoặc truy vấn**. Nó không dò từ khóa ( kiểu grep hàm ) mà nó truy ngược **đường đi của dữ liệu** 
 từ nơi đi vào đến nơi phát nổ, rồi in ra cả đường đi để anh em tự kiểm chứng.
 
@@ -110,7 +110,7 @@ kiểm tra bằng tay.
 Đây là **dự án cá nhân**, viết ra vì mong muốn anh em dev Việt Nam có một công cụ **tiếng Việt** để
 soi lại code **trước khi đưa lên production**.
 
-Nó tồn tại như **một lớp tham khảo thêm** bên cạnh việc tự review hoặc phải tìm một người khác pentest hoặc thậm chí phải dùng AI agent để scan lại ( làm tốn token quý giá của anh em ), không cần cấu hình,
+Nó tồn tại như **một lớp tham khảo thêm** bên cạnh việc tự review mà không phải tìm một người khác pentest hoặc thậm chí phải dùng AI agent để scan lại ( làm tốn token quý giá của anh em ), không cần cấu hình,
 chỉ ra chỗ đáng ngờ kèm đường đi của dữ liệu, rồi phần còn lại toàn quyền xử lý của anh em.
 
 ---
@@ -189,7 +189,7 @@ mã nguồn của anh em
 ngay khi khởi động, nên mọi nỗ lực gọi mạng hay tạo tiến trình đều ném lỗi. Đây là lý do anh em có thể
 trỏ nó vào mã lạ mà không cần sandbox riêng.
 
-### Ở bước 2, khi gặp liên kết ( symlink / junction )
+Ở bước 2, khi gặp liên kết ( symlink / junction )
 
 Mặc định công cụ **không đi theo liên kết** - gặp cái nào bỏ cái đó. Bật `--follow-symlinks` thì nó đi
 theo, nhưng **chỉ những liên kết có đích nằm trong thư mục đang quét**; đích trỏ ra ngoài bị chặn và
@@ -204,6 +204,12 @@ Ba điều anh em nên biết khi bật cờ này:
   liên kết, vì đó mới là chỗ tệp thực sự nằm.
 - Liên kết trỏ vào thư mục vốn bị loại trừ ( `vendor`, `node_modules`, `dist`… ) thì **vẫn được quét**.
   Đi theo liên kết là quyết định của anh em, nên ở đây công cụ chọn quét sót ít hơn là im lặng bỏ qua.
+
+Những tệp công cụ tự đi tìm trong cây được quét - `.fortress-scan.json`, `.fortress-scanignore`,
+`.gitignore` - thì **không bao giờ được đọc xuyên qua một liên kết**, kể cả khi `--follow-symlinks`
+đang bật. Chúng do người viết repo đặt, mà một liên kết ở đúng chỗ đó thì trỏ ra ngoài thư mục anh
+em chỉ định được. Gặp liên kết là bỏ, và nói ra là đã bỏ. Tệp cấu hình anh em tự trỏ tới bằng
+`--config` thì không dính luật này - đó là lựa chọn của anh em.
 
 Ngoài ra, giữa lúc liệt kê cây và lúc mở tệp ra đọc luôn có một khoảng trống. Ai ghi được vào cây
 đang bị quét có thể tráo tệp ngay trong khoảng đó để đẩy nội dung khác vào phần phân tích. Công cụ
@@ -236,6 +242,10 @@ Có hai bộ phân tích:
 Rẽ nhánh thì hai nhánh được **gộp lại** ( nhiễm ở một nhánh là đủ để cảnh báo ), vòng lặp chỉ chạy vài
 vòng rồi dừng, và mỗi tệp có **ngân sách** số node/token nên một tệp dựng riêng để làm treo công cụ
 sẽ bị cắt chứ không kéo cả lần quét đi theo.
+
+Bước dò chú thích `fortress-scan: ignore` cũng có ngân sách riêng của nó. Cạn ngân sách thì **toàn bộ
+chú thích trong tệp đó bị bỏ** và báo cáo ghi mã `suppression-scan-too-complex` - tức là ngả về phía
+không giấu gì cả, y như khi một tệp ignore vượt hạn mức.
 
 ---
 
@@ -297,7 +307,8 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 **Trên Linux và macOS: tác giả chưa chạy thử thực tế.** Mã nguồn viết theo hướng đa nền tảng và 
 nhiều khả năng chạy bình thường, nhưng **chưa có bằng chứng thực nghiệm** - nếu anh em nào có dùng
 Linux/macOS xin coi đây là phiên bản thử nghiệm 
-( sắp tới mình sẽ qua research bên Linux để kiểm tra kĩ hơn ).
+( sắp tới mình sẽ qua research bên Linux để kiểm tra kĩ hơn - thú thật với mọi người là phần này 
+mình có thiết kế cho AI viết để đảm bảo tránh xung đột hệ điều hành ).
 
 ### Khi quét mã không đáng tin
 
@@ -337,6 +348,12 @@ Nếu ae quên tắt: khi `.fortress-scan.json` trong cây được quét làm h
 đường dẫn, nâng ngưỡng, hạ giới hạn kích thước… ), công cụ **nói rõ nó đã tắt những gì**. Một báo cáo
 "sạch" sinh ra từ cấu hình của người khác sẽ không im lặng nữa.
 
+`.gitignore` và `.fortress-scanignore` cũng vậy: hễ chúng gỡ được **tệp mã nguồn** nào ra khỏi lượt
+quét thì báo cáo nói ra số tệp và số thư mục bị gỡ. Một dòng `app/session.py` trong `.gitignore` là
+đủ để giấu đúng cái tệp có lỗ hổng, mà mọi con số còn lại trong báo cáo vẫn trông bình thường - nên
+chỗ này không được im. Cái gì chính anh em gạt bằng `--exclude` thì không bị cảnh báo lại, vì đó là
+quyết định của anh em chứ không phải của repo lạ.
+
 Quan trọng là cảnh báo này **có mặt ở mọi định dạng**, không riêng màn hình - ai chạy `-f json -o
 bao-cao.json` hay đẩy SARIF lên GitHub code scanning thường không đọc stderr:
 
@@ -347,10 +364,15 @@ bao-cao.json` hay đẩy SARIF lên GitHub code scanning thường không đọc
 | SARIF | `runs[].invocations[].toolExecutionNotifications` |
 | Markdown | mục `⚠️ Phạm vi quét đã bị thu hẹp`, đặt trước phần phát hiện |
 
-Vẫn in ra stderr như cũ nữa, nên script cũ của anh em không hỏng gì.
+Vẫn in ra stderr như cũ nữa, nên script cũ của anh em không hư hỏng gì.
 
 Cùng chỗ đó còn báo luôn **số tệp bị bỏ qua** và **số liên kết chưa đi theo** - những mảng mã chưa
 từng được soi, trước đây chỉ nằm im dưới dạng một con số trong JSON.
+
+Phần tổng kết còn thêm **số thư mục bị bỏ theo danh sách loại trừ mặc định** ( `node_modules`,
+`dist`, `build`, `vendor`… ). Cái này là quyết định của công cụ chứ không phải của repo nên nó chỉ
+là một dòng thống kê, không phải `CẢNH BÁO` - nhưng ai đang đọc mã lạ thì nên liếc qua, vì `dist/`
+là chỗ đầu tiên người ta nghĩ tới khi muốn giấu một tệp.
 
 Muốn CI chặn hẳn thì thêm `--fail-on-coverage-reduction`: hễ có thứ gì làm hẹp phạm vi quét là thoát
 `1`, kể cả khi không tìm ra lỗi nào. Mặc định cờ này **tắt**, nên mã thoát của anh em không đổi nếu
@@ -360,13 +382,14 @@ không tự bật.
 
 ## Góp ý & báo lỗi
 Do đây là dự án đầu tay của mình nên sẽ không tránh khỏi những thiếu sót nên hy vọng anh em có phát 
-hiện gì thì hãy báo với mình qua mail hoặc kênh liên lạc trực tiếp. Chân thành cảm ơn anh em rất nhiều.
+hiện gì thì hãy báo với mình qua mail ( vophuvinh15012007@gmail.com ) hoặc kênh liên lạc trực tiếp. 
 
-
-Để chuyên nghiệp hơn xíu thì khi báo lỗi, xin kèm giúp: **phiên bản công cụ**, **hệ điều hành**, và 
-**một đoạn mã tối thiểu tái hiện được lỗi**.
+Để chuyên nghiệp hơn xíu thì khi báo lỗi anh em kèm giúp mình: **phiên bản công cụ**, **hệ điều hành**, và 
+**một đoạn mã tối thiểu tái hiện được lỗi** để mình hiểu rõ hơn về vấn đề cũng như thuận tiện cho việc fix nhé
 
 Mình đọc và phản hồi tất cả, chỉ là có thể hơi chậm.
+
+### Chân thành cảm ơn anh em rất nhiều.
 
 ---
 
@@ -376,7 +399,7 @@ Mình đọc và phản hồi tất cả, chỉ là có thể hơi chậm.
 
 Dự án có **sự hỗ trợ của AI** (Claude) trong quá trình tham khảo cách triển khai và đẩy nhanh tiến
 độ: phác thảo kiến trúc, sinh mã cho các engine phân tích, viết bộ test và soạn tài liệu. Toàn bộ
-hướng đi, yêu cầu, quyết định thiết kế và việc kiểm thử đều do tác giả điều hướng và rà soát. Mình
+hướng đi, yêu cầu, quyết định thiết kế và việc kiểm thử đều do mình điều hướng và rà soát. Mình
 ghi rõ điều này vì cho rằng người dùng có quyền biết mã họ đang chạy được tạo ra như thế nào.
 
 Cảm ơn anh em đã dành thời gian đọc tới đây và tin dùng Fortress Scan. Nếu công cụ giúp ích được cho
@@ -387,3 +410,6 @@ anh em, một ngôi sao trên GitHub của mọi người là nguồn động vi
 ## Giấy phép
 
 [MIT](LICENSE) - dùng tự do cho cả mục đích cá nhân và thương mại.
+ 
+Không được dùng để bán, cung cấp cho các dịch vụ trả phí hoặc các 
+hành vi dùng cho mục đích xấu.
