@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from ..core.model import Finding, ScanResult, Severity
 from ..core.registry import all_rules, get_rule, rules_digest
-from ..security.text import display_path
+from ..security.text import display_path, neutralize
 
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
@@ -279,4 +279,8 @@ def rules_catalogue() -> str:
 
 
 def _escape(text: str) -> str:
-    return text.replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
+    # neutralize() trước cả escape cú pháp: | < > chỉ giữ cho bảng Markdown
+    # không vỡ, còn escape sequence của terminal thì đi xuyên qua nguyên vẹn và
+    # nổ ra khi ai đó cat tệp .md hoặc để CI in nó vào log. JSON và SARIF thoát
+    # nạn này nhờ json.dumps, Markdown thì không có ai lo hộ.
+    return neutralize(text).replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")

@@ -223,7 +223,12 @@ def build_config(data: Dict[str, Any], base: Optional[Config] = None) -> Config:
     config = base or Config()
     unknown = sorted(set(data) - _ALLOWED_KEYS)
     if unknown:
-        raise ConfigError("khóa cấu hình không hợp lệ: %s" % ", ".join(unknown))
+        # repr() như mọi thông báo lỗi khác ở đây: tên khóa là do tệp cấu hình
+        # đặt, tức là do người viết repo bị quét đặt, nên nó không được đi
+        # nguyên xi vào một thông báo sẽ in ra terminal.
+        raise ConfigError(
+            "khóa cấu hình không hợp lệ: %s" % ", ".join(repr(key) for key in unknown)
+        )
 
     overrides: Dict[str, Any] = {}
     for key, value in data.items():
