@@ -211,6 +211,7 @@ class ScanStats:
     files_discovered: int = 0
     files_analyzed: int = 0
     files_skipped: int = 0
+    directories_excluded: int = 0
     bytes_analyzed: int = 0
     duration_seconds: float = 0.0
     languages: Dict[str, int] = field(default_factory=dict)
@@ -220,6 +221,7 @@ class ScanStats:
             "files_discovered": self.files_discovered,
             "files_analyzed": self.files_analyzed,
             "files_skipped": self.files_skipped,
+            "directories_excluded": self.directories_excluded,
             "bytes_analyzed": self.bytes_analyzed,
             "duration_seconds": round(self.duration_seconds, 4),
             "languages": dict(sorted(self.languages.items())),

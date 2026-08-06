@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List, Optional, Set, Tuple
 
-from ..languages import PYTHON, detect_language, is_scannable_name
+from ..languages import PYTHON, detect_language, is_scannable_name, language_from_name
 from ..security import paths as safe_paths
 from .config import Config
 from .ignore import IgnoreSet
@@ -45,6 +45,14 @@ class Discovery:
         self.errors: List[ScanError] = []
         self.skipped = 0
         self.skipped_links = 0
+        # Tệp ignore nằm TRONG cây được quét, tức là do người viết repo đặt --
+        # cùng loại dữ liệu không tin cậy với .fortress-scan.json. Không đếm thì
+        # một báo cáo "sạch" do chúng tạo ra không nói được vì sao mình sạch.
+        self.ignored_files = 0
+        self.ignored_directories = 0
+        # Danh sách loại trừ mặc định là quyết định của công cụ, không phải của
+        # repo, nên nó đi vào thống kê chứ không thành CẢNH BÁO.
+        self.excluded_directories_hit = 0
 
     def walk(self) -> Iterator[DiscoveredFile]:
         if self._root.is_file():
@@ -152,13 +160,20 @@ class Discovery:
 
             if is_directory:
                 if entry.name in self._excluded:
+                    self.excluded_directories_hit += 1
                     continue
                 if ignore.matches(relative, True):
+                    if not self._chosen_by_user(relative, True):
+                        self.ignored_directories += 1
                     continue
                 subdirectories.append(target)
                 continue
 
             if ignore.matches(relative, False):
+                if not self._chosen_by_user(relative, False) and language_from_name(
+                    entry_path.name
+                ) is not None:
+                    self.ignored_files += 1
                 continue
             if self._include and not self._include.matches(relative, False):
                 continue
@@ -169,6 +184,17 @@ class Discovery:
         for subdirectory in subdirectories:
             for discovered in self._walk_directory(subdirectory, ignore, depth + 1):
                 yield discovered
+
+    def _chosen_by_user(self, relative: str, is_directory: bool) -> bool:
+        """Đường dẫn này bị loại vì --exclude / khoá `exclude` chứ không phải vì
+        một tệp ignore trong cây.
+
+        Người dùng tự gõ --exclude thì không cần ai cảnh báo lại họ, còn khoá
+        `exclude` trong .fortress-scan.json đã có cảnh báo riêng rồi. Kiểm sau
+        khi đã biết đường dẫn bị loại nên phép so thêm này chỉ chạy cho số ít
+        entry, và cách gộp quy tắc ở trên giữ nguyên không đổi.
+        """
+        return bool(self._explicit) and self._explicit.matches(relative, is_directory)
 
     def _resolve_entry(
         self, entry: "os.DirEntry[str]", entry_path: Path, relative: str

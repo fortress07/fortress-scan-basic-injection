@@ -335,6 +335,17 @@ def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]
     source = find_config_file(target if target.exists() else Path("."))
     if source is None:
         return config, ()
+    # Tệp cấu hình được TÌM THẤY trong cây bị quét, không phải do người dùng
+    # chỉ định, nên nó là dữ liệu không tin cậy. Đi theo một liên kết ở đây là
+    # đọc một tệp nằm ngoài thư mục được trỏ tới -- và tên khoá trong đó lại đi
+    # thẳng ra stderr. Ignore file đã chặn đúng chuyện này từ trước
+    # (discovery._load_ignore_files); chỗ này thì chưa.
+    if safe_paths.is_link_like(source):
+        return config, (
+            "%s là một liên kết nên đã bị bỏ qua; lượt quét dùng cấu hình mặc định"
+            % safe_text.display_path(str(source)),
+            "liên kết ở vị trí này trỏ được ra ngoài cây quét, nên công cụ không đọc nó",
+        )
     data = load_config_file(source)
     return build_config(data, config), _project_config_notices(source, data)
 

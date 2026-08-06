@@ -486,6 +486,113 @@ def test_coverage_reduction_can_gate_the_exit_code(tmp_path: Path):
     assert cli.main([str(tmp_path), "--quiet", "--no-config", "--fail-on-coverage-reduction"]) == 0
 
 
+def _repo_with_a_hidden_backdoor(root: Path, ignore_name: str) -> None:
+    (root / "app").mkdir()
+    (root / "app" / "util.py").write_text(
+        "import html\ndef ok(v):\n    return html.escape(v)\n", encoding="utf-8"
+    )
+    (root / "app" / "session.py").write_text(
+        "import os\n"
+        "from flask import request\n"
+        "def run():\n"
+        "    os.system('ping ' + request.args.get('c'))\n",
+        encoding="utf-8",
+    )
+    (root / ignore_name).write_text("app/session.py\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("ignore_name", (".gitignore", ".fortress-scanignore"))
+def test_ignore_files_in_the_tree_cannot_hide_code_silently(
+    tmp_path: Path, ignore_name: str
+):
+    """Tệp ignore nằm TRONG cây được quét là do người viết repo đặt.
+
+    `.fortress-scan.json` thu hẹp phạm vi thì đã có cảnh báo từ trước, còn hai
+    tệp này thì chưa -- một repo giấu đúng tệp có lỗ hổng vẫn ra báo cáo "sạch"
+    với notices rỗng, errors rỗng và files_skipped bằng 0, không một dấu vết nào
+    cho người đọc biết là có mã chưa từng được soi.
+    """
+    _repo_with_a_hidden_backdoor(tmp_path, ignore_name)
+    result = scan(str(tmp_path), Config())
+
+    assert not result.findings, "phép thử chỉ có nghĩa khi backdoor thật sự bị giấu"
+    notice = next(
+        (item for item in result.notices if item.kind == "ignore-files-applied"), None
+    )
+    assert notice is not None, "mã bị gỡ khỏi lượt quét mà báo cáo không nói gì"
+    assert "1 tệp mã nguồn" in notice.summary
+
+
+def test_hidden_code_can_gate_the_exit_code(tmp_path: Path):
+    _repo_with_a_hidden_backdoor(tmp_path, ".gitignore")
+
+    assert cli.main([str(tmp_path), "--quiet"]) == 0
+    assert cli.main([str(tmp_path), "--quiet", "--fail-on-coverage-reduction"]) == 1
+    # Tắt tệp ignore đi thì backdoor lộ ra, và mã thoát đổi vì phát hiện thật.
+    assert cli.main([str(tmp_path), "--quiet", "--no-vcs-ignore"]) == 1
+
+
+def test_the_ignore_notice_reaches_every_output_format(tmp_path: Path):
+    """Người đọc JSON hay SARIF cũng cần biết vì sao báo cáo lại sạch."""
+    _repo_with_a_hidden_backdoor(tmp_path, ".gitignore")
+    result = scan(str(tmp_path), Config())
+
+    payload = json.loads(to_json(result, "0.0.0"))
+    assert any(item["kind"] == "ignore-files-applied" for item in payload["notices"])
+
+    sarif = json.loads(to_sarif(result, "0.0.0"))
+    notifications = sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+    assert any(
+        item["descriptor"]["id"] == "ignore-files-applied" for item in notifications
+    )
+
+    assert "Phạm vi quét đã bị thu hẹp" in to_markdown(result, "0.0.0")
+
+
+def test_a_path_the_user_excluded_is_not_warned_about(tmp_path: Path):
+    """--exclude là lựa chọn của chính người chạy, không phải của cây bị quét.
+
+    Cảnh báo ngược lại họ về quyết định họ vừa gõ ra là đúng loại nhiễu làm
+    người ta ngừng đọc cảnh báo.
+    """
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "session.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "app" / "util.py").write_text("value = 2\n", encoding="utf-8")
+
+    result = scan(str(tmp_path), Config(exclude_patterns=("app/session.py",)))
+    assert result.stats.files_analyzed == 1
+    assert not any(item.kind == "ignore-files-applied" for item in result.notices)
+
+
+def test_a_routine_gitignore_stays_quiet(tmp_path: Path):
+    """Gitignore điển hình chỉ che tạo phẩm build, và những thứ đó đã nằm sẵn
+    trong danh sách loại trừ mặc định -- không có mã nguồn nào mất đi, nên
+    không có gì để cảnh báo."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "notes.log").write_text("dòng log\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(
+        "__pycache__/\n*.py[cod]\n*.log\nbuild/\ndist/\n.venv/\n", encoding="utf-8"
+    )
+
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 1
+    assert not any(item.kind == "ignore-files-applied" for item in result.notices)
+
+
+def test_default_excluded_directories_are_counted(tmp_path: Path):
+    """Danh sách loại trừ mặc định là quyết định của công cụ chứ không phải của
+    repo, nên nó vào thống kê chứ không thành CẢNH BÁO -- nhưng vẫn phải đếm
+    được, vì `dist/` là chỗ đầu tiên người ta nghĩ tới khi muốn giấu mã."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "loader.py").write_text("value = 2\n", encoding="utf-8")
+
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 1
+    assert result.stats.directories_excluded == 1
+    assert not any(item.kind == "ignore-files-applied" for item in result.notices)
+
+
 def test_skipped_links_are_reported_not_just_counted(tmp_path: Path):
     """Liên kết bị bỏ qua là mã chưa từng được soi -- phải nói ra, không chỉ
     nằm im trong một con số ở JSON."""
