@@ -37,6 +37,18 @@ EXIT_INTERNAL = 3
 _FORMATS = ("console", "json", "sarif", "markdown")
 
 
+def _stderr(message: str) -> None:
+    """Ghi một dòng ra stderr, đã trung hòa ký tự điều khiển.
+
+    stderr là đường ra duy nhất không đi qua định dạng nào: JSON và SARIF được
+    json.dumps che, thân báo cáo console đi qua neutralize(), còn ở đây chỉ có
+    chuỗi thô. Mà chuỗi thô đó lại hay mang nội dung từ cây bị quét -- đường
+    dẫn tệp, tên khóa và giá trị trong .fortress-scan.json. Chặn tại một chỗ
+    duy nhất, để chỗ gọi không phải tự nhớ.
+    """
+    sys.stderr.write(safe_text.neutralize(message) + "\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fortress-scan",
@@ -197,24 +209,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     sandbox.engage()
     for warning in sandbox.elevated_privilege_warnings():
-        sys.stderr.write("fortress-scan: cảnh báo: %s\n" % warning)
+        _stderr("fortress-scan: cảnh báo: %s" % warning)
 
     try:
         config, config_notices = _resolve_config(args)
     except (ConfigError, ValueError) as exc:
-        sys.stderr.write("fortress-scan: %s\n" % exc)
+        _stderr("fortress-scan: %s" % exc)
         return EXIT_USAGE
     if config_notices:
-        sys.stderr.write("fortress-scan: cảnh báo: %s\n" % config_notices[0])
+        _stderr("fortress-scan: cảnh báo: %s" % config_notices[0])
         for detail in config_notices[1:]:
-            sys.stderr.write("    %s\n" % detail)
+            _stderr("    %s" % detail)
 
     baseline_fingerprints: Set[str] = set()
     if args.baseline:
         try:
             baseline_fingerprints = baseline_module.load(Path(args.baseline))
         except baseline_module.BaselineError as exc:
-            sys.stderr.write("fortress-scan: %s\n" % exc)
+            _stderr("fortress-scan: %s" % exc)
             return EXIT_USAGE
 
     output_path: Optional[Path] = None
@@ -222,7 +234,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             output_path = safe_paths.validate_output_path(args.output)
         except safe_paths.PathConfinementError as exc:
-            sys.stderr.write("fortress-scan: %s\n" % exc)
+            _stderr("fortress-scan: %s" % exc)
             return EXIT_USAGE
 
     baseline_path: Optional[Path] = None
@@ -230,7 +242,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             baseline_path = safe_paths.validate_output_path(args.write_baseline)
         except safe_paths.PathConfinementError as exc:
-            sys.stderr.write("fortress-scan: %s\n" % exc)
+            _stderr("fortress-scan: %s" % exc)
             return EXIT_USAGE
 
     from .core.engine import scan
@@ -250,27 +262,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         result = scan(args.target, config, baseline_fingerprints, scan_notices)
     except safe_paths.PathConfinementError as exc:
-        sys.stderr.write("fortress-scan: %s\n" % exc)
+        _stderr("fortress-scan: %s" % exc)
         return EXIT_USAGE
     except KeyboardInterrupt:
-        sys.stderr.write("fortress-scan: đã dừng theo yêu cầu\n")
+        _stderr("fortress-scan: đã dừng theo yêu cầu")
         return EXIT_INTERNAL
     except Exception as exc:
-        sys.stderr.write("fortress-scan: lỗi nội bộ: %s: %s\n" % (type(exc).__name__, exc))
+        _stderr("fortress-scan: lỗi nội bộ: %s: %s" % (type(exc).__name__, exc))
         return EXIT_INTERNAL
 
     if baseline_path is not None:
         try:
             baseline_path.write_text(baseline_module.serialize(result.findings), encoding="utf-8")
         except OSError as exc:
-            sys.stderr.write("fortress-scan: không ghi được baseline: %s\n" % exc)
+            _stderr("fortress-scan: không ghi được baseline: %s" % exc)
             return EXIT_USAGE
 
     if not args.quiet:
         try:
             _emit(result, args, output_path)
         except OSError as exc:
-            sys.stderr.write("fortress-scan: không ghi được báo cáo: %s\n" % exc)
+            _stderr("fortress-scan: không ghi được báo cáo: %s" % exc)
             return EXIT_USAGE
 
     if args.exit_zero:
@@ -306,7 +318,7 @@ def _emit(result: ScanResult, args: argparse.Namespace, output_path: Optional[Pa
         sys.stdout.write(payload)
         return
     output_path.write_text(payload, encoding="utf-8")
-    sys.stderr.write("fortress-scan: đã ghi báo cáo vào %s\n" % output_path)
+    _stderr("fortress-scan: đã ghi báo cáo vào %s" % output_path)
 
 
 def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
