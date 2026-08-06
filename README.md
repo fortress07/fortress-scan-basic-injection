@@ -186,8 +186,29 @@ mã nguồn của anh em
 ```
 
 Ở bước 1: công cụ **vá đè** `socket`, `subprocess`, `os.system`, `os.fork`…
-ngay khi khởi động, nên mọi nỗ lực gọi mạng hay tạo tiến trình đều ném lỗi. Đây là lý do bạn có thể
+ngay khi khởi động, nên mọi nỗ lực gọi mạng hay tạo tiến trình đều ném lỗi. Đây là lý do anh em có thể
 trỏ nó vào mã lạ mà không cần sandbox riêng.
+
+### Ở bước 2, khi gặp liên kết ( symlink / junction )
+
+Mặc định công cụ **không đi theo liên kết** - gặp cái nào bỏ cái đó. Bật `--follow-symlinks` thì nó đi
+theo, nhưng **chỉ những liên kết có đích nằm trong thư mục đang quét**; đích trỏ ra ngoài bị chặn và
+ghi vào báo cáo dưới mã `link-escapes-root`. Liên kết vòng ( a trỏ b, b trỏ a ) cũng bị chặn ở đây chứ
+không làm treo lượt quét.
+
+Ba điều anh em nên biết khi bật cờ này:
+
+- Cùng một tệp tới được qua nhiều tên ( qua liên kết và qua tên thật ) chỉ được **quét một lần**, nên
+  workspace kiểu pnpm - vốn là cả một rừng symlink - không làm phát hiện bị nhân bản.
+- Phát hiện nằm dưới một thư mục được liên kết sẽ báo theo **đường dẫn thật**, không phải đường dẫn
+  liên kết, vì đó mới là chỗ tệp thực sự nằm.
+- Liên kết trỏ vào thư mục vốn bị loại trừ ( `vendor`, `node_modules`, `dist`… ) thì **vẫn được quét**.
+  Đi theo liên kết là quyết định của anh em, nên ở đây công cụ chọn quét sót ít hơn là im lặng bỏ qua.
+
+Ngoài ra, giữa lúc liệt kê cây và lúc mở tệp ra đọc luôn có một khoảng trống. Ai ghi được vào cây
+đang bị quét có thể tráo tệp ngay trong khoảng đó để đẩy nội dung khác vào phần phân tích. Công cụ
+đối chiếu lại **trên chính handle đã mở** ( chứ không kiểm lại đường dẫn ), tệp nào bị tráo thì bỏ
+và ghi vào báo cáo dưới mã `file-changed-during-scan`.
 
 ### Nó "hiểu" mã như thế nào - truy vết đường đi của dữ liệu
 
@@ -313,9 +334,27 @@ Giới hạn theo rule bằng `# fortress-scan: ignore [FSB-CMD-001]`. Chú thí
 ignore-file"` chỉ là dữ liệu, không tắt gì hết.
 
 Nếu ae quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi ( tắt rule, loại trừ
-đường dẫn, nâng ngưỡng, hạ giới hạn kích thước… ), công cụ **in cảnh báo ra stderr và nói rõ nó đã tắt
-những gì**. Một báo cáo "sạch" sinh ra từ cấu hình của người khác sẽ không im lặng nữa. Cảnh báo đi
-ra stderr nên không lẫn vào báo cáo JSON/SARIF khi anh em chuyển hướng stdout.
+đường dẫn, nâng ngưỡng, hạ giới hạn kích thước… ), công cụ **nói rõ nó đã tắt những gì**. Một báo cáo
+"sạch" sinh ra từ cấu hình của người khác sẽ không im lặng nữa.
+
+Quan trọng là cảnh báo này **có mặt ở mọi định dạng**, không riêng màn hình - ai chạy `-f json -o
+bao-cao.json` hay đẩy SARIF lên GitHub code scanning thường không đọc stderr:
+
+| Định dạng | Cảnh báo nằm ở |
+| --- | --- |
+| console | khối `CẢNH BÁO` ngay trên phần tổng kết, không cần `-v` |
+| JSON | mảng `notices` ở cấp cao nhất |
+| SARIF | `runs[].invocations[].toolExecutionNotifications` |
+| Markdown | mục `⚠️ Phạm vi quét đã bị thu hẹp`, đặt trước phần phát hiện |
+
+Vẫn in ra stderr như cũ nữa, nên script cũ của anh em không hỏng gì.
+
+Cùng chỗ đó còn báo luôn **số tệp bị bỏ qua** và **số liên kết chưa đi theo** - những mảng mã chưa
+từng được soi, trước đây chỉ nằm im dưới dạng một con số trong JSON.
+
+Muốn CI chặn hẳn thì thêm `--fail-on-coverage-reduction`: hễ có thứ gì làm hẹp phạm vi quét là thoát
+`1`, kể cả khi không tìm ra lỗi nào. Mặc định cờ này **tắt**, nên mã thoát của anh em không đổi nếu
+không tự bật.
 
 ---
 

@@ -15,8 +15,8 @@ from . import baseline as baseline_module
 from . import suppression as suppression_module
 from .budget import Budget, BudgetExceeded
 from .config import Config
-from .discovery import Discovery, DiscoveredFile, read_source
-from .model import Finding, ScanError, ScanResult, ScanStats
+from .discovery import Discovery, DiscoveredFile, FileChangedDuringScan, read_source
+from .model import Finding, ScanError, ScanNotice, ScanResult, ScanStats
 
 _PYTHON_ANALYZER = PythonAnalyzer()
 _GENERIC_ANALYZER = GenericAnalyzer()
@@ -30,10 +30,13 @@ def scan(
     target: str,
     config: Optional[Config] = None,
     baseline_fingerprints: Optional[Set[str]] = None,
+    notices: Optional[Sequence[ScanNotice]] = None,
 ) -> ScanResult:
     settings = config or Config()
     root = safe_paths.resolve_root(target)
     started = time.monotonic()
+
+    coverage_notices: List[ScanNotice] = list(notices or ())
 
     discovery = Discovery(root, settings)
     discovered = list(discovery.walk())
@@ -56,6 +59,20 @@ def scan(
 
     stats.files_skipped = discovery.skipped + (len(discovered) - stats.files_analyzed)
 
+    # Bỏ qua liên kết là hành vi mặc định và đúng, nhưng nó vẫn là một mảng mã
+    # chưa từng được soi. Nói ra, đừng để người đọc tự đoán từ một con số.
+    if discovery.skipped_links:
+        coverage_notices.append(
+            ScanNotice(
+                kind="links-skipped",
+                summary=(
+                    "đã bỏ qua %d liên kết; mã nằm sau chúng chưa được phân tích"
+                    % discovery.skipped_links
+                ),
+                details=("bật --follow-symlinks để đi theo liên kết nằm trong thư mục quét",),
+            )
+        )
+
     findings.sort(key=lambda item: item.sort_key)
     if len(findings) > _MAX_FINDINGS:
         errors.append(
@@ -76,6 +93,7 @@ def scan(
         root=str(root),
         findings=findings,
         errors=errors,
+        notices=coverage_notices,
         stats=stats,
         suppressed=suppressed,
         baselined=baselined,
@@ -127,7 +145,16 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
     outcome.language = discovered.language
     outcome.size = discovered.size
     try:
-        source, degraded = read_source(discovered.path, discovered.language)
+        source, degraded = read_source(
+            discovered.path, discovered.language, discovered.identity
+        )
+    except FileChangedDuringScan:
+        outcome.error = ScanError(
+            path=discovered.relative,
+            reason="file-changed-during-scan",
+            detail="tệp bị thay thế sau khi được liệt kê nên không được phân tích",
+        )
+        return outcome
     except OSError as exc:
         outcome.error = ScanError(
             path=discovered.relative, reason="unreadable-file", detail=exc.strerror or ""

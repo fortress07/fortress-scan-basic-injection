@@ -15,7 +15,7 @@ from .core.config import (
     find_config_file,
     load_config_file,
 )
-from .core.model import ScanResult, parse_confidence, parse_severity
+from .core.model import ScanNotice, ScanResult, parse_confidence, parse_severity
 from .core.registry import all_rules, rules_digest
 from .report import (
     ConsoleReporter,
@@ -88,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     selection.add_argument(
         "--exit-zero", action="store_true", help="luôn thoát 0 kể cả khi có phát hiện"
+    )
+    selection.add_argument(
+        "--fail-on-coverage-reduction",
+        action="store_true",
+        help="thoát khác 0 nếu có thứ gì làm hẹp phạm vi quét (cấu hình trong cây, liên kết bị bỏ)",
     )
     selection.add_argument(
         "--disable", metavar="RULE", action="append", default=[], help="tắt một rule theo mã"
@@ -230,8 +235,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     from .core.engine import scan
 
+    scan_notices = (
+        [
+            ScanNotice(
+                kind="project-config",
+                summary=config_notices[0],
+                details=tuple(config_notices[1:]),
+            )
+        ]
+        if config_notices
+        else []
+    )
+
     try:
-        result = scan(args.target, config, baseline_fingerprints)
+        result = scan(args.target, config, baseline_fingerprints, scan_notices)
     except safe_paths.PathConfinementError as exc:
         sys.stderr.write("fortress-scan: %s\n" % exc)
         return EXIT_USAGE
@@ -258,6 +275,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.exit_zero:
         return EXIT_CLEAN
+    # Kiểm trước cả ngưỡng mức độ: một lượt quét bị bóp hẹp thì con số "không
+    # có phát hiện nào" chưa nói lên được điều gì.
+    if args.fail_on_coverage_reduction and result.notices:
+        return EXIT_FINDINGS
     highest = result.highest_severity()
     if highest is not None and highest >= config.fail_on:
         return EXIT_FINDINGS
@@ -361,11 +382,13 @@ def _project_config_notices(source: Path, data: Dict[str, Any]) -> Tuple[str, ..
     reductions = coverage_reductions(data)
     if not reductions:
         return ()
+    # Giữ chuỗi ở dạng thuần, không nhúng sẵn dấu đầu dòng: chúng còn đi vào
+    # JSON, SARIF và Markdown, nơi mỗi định dạng tự lo cách trình bày.
     lines = [
         "%s trong cây được quét đã thu hẹp phạm vi quét:"
         % safe_text.display_path(str(source))
     ]
-    lines.extend("- %s" % note for note in reductions)
+    lines.extend(reductions)
     lines.append("chạy lại với --no-config nếu không tin tệp cấu hình này")
     return tuple(lines)
 
