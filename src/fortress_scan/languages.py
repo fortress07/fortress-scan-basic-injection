@@ -84,6 +84,20 @@ def is_scannable_name(name: str) -> bool:
     return not name.startswith(".") or name in _FILENAME_MAP
 
 
+def language_from_name(name: str) -> Optional[str]:
+    """Ngôn ngữ suy được CHỈ từ tên, không chạm vào đĩa.
+
+    Dùng để đếm những tệp bị tệp ignore loại bỏ: ở đó ta cần biết "đây có phải
+    mã nguồn không" mà không được mở tệp -- mở ra thì hoá ra vẫn đọc đúng thứ
+    vừa tuyên bố là bỏ qua. Đổi lại, script không có phần mở rộng (nhận diện
+    bằng shebang) không được tính, nên số đếm là cận dưới.
+    """
+    mapped = _FILENAME_MAP.get(name)
+    if mapped is not None:
+        return mapped
+    return _EXTENSION_MAP.get(PurePath(name).suffix.lower())
+
+
 def detect_language(path: Path, name: Optional[str] = None) -> Optional[str]:
     """`name` tách tên hiển thị khỏi tệp thật trên đĩa.
 
