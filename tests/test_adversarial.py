@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import os
@@ -9,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from fortress_scan import cli
 from fortress_scan.core.config import Config, ConfigError, build_config
 from fortress_scan.core.engine import scan, scan_source
+from fortress_scan.core.suppression import SuppressionIndex
 from fortress_scan.languages import PYTHON
 from fortress_scan.report import ConsoleReporter, to_json, to_sarif
 from fortress_scan.security import runtime as sandbox
@@ -175,6 +178,100 @@ class TestAttacksOnTheScanner:
         result = scan(str(tmp_path), Config())
         assert any(error.reason == "parse-error" for error in result.errors)
         assert any(f.rule_id == "FSB-UNI-002" for f in result.findings)
+
+    def test_unclosed_interpolation_cannot_hang_the_suppression_masker(self):
+        """Bộ mặt nạ chuỗi chạy NGOÀI Budget của engine, nên nó tự mang hạn mức.
+
+        Một dòng `"${${${...` không có dấu đóng bắt _scan_to_closer quét lại tới
+        cuối dòng ở từng vị trí một. Không chặn thì đó là O(n^2): tệp 16 KB tốn
+        128 triệu bước, và 2 MB mặc định của max_file_bytes đủ treo lượt quét
+        hàng chục giờ -- trong khi mọi ngân sách của engine đều đã chạy xong.
+        """
+        payload = '// fortress-scan\nvar T = "' + "${" * 8000
+        index = SuppressionIndex.from_lines(tuple(payload.split("\n")))
+
+        assert index.overflowed, "hạn mức không chạm tới payload nên phép thử vô nghĩa"
+        assert not bool(index), "tràn hạn mức thì không chỉ thị nào được giữ lại"
+
+    def test_masker_overflow_hides_nothing_and_says_so(self, tmp_path: Path):
+        """Hướng an toàn khi cạn hạn mức: bỏ hết chỉ thị chứ không bỏ qua tệp.
+
+        Cùng lối với IgnoreSet.overflowed -- không phát hiện nào bị giấu, và
+        người đọc báo cáo biết vì sao chỉ thị trong tệp này không còn tác dụng.
+        """
+        (tmp_path / "evil.py").write_text(
+            "# fortress-scan: ignore-file\n"
+            'T = "' + "${" * 40000 + '"\n'
+            "import os\n"
+            "os.system(input())\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+
+        assert any(
+            error.reason == "suppression-scan-too-complex" for error in result.errors
+        )
+        assert result.suppressed == 0, "tràn hạn mức mà vẫn ẩn được phát hiện"
+
+    def test_a_dense_but_honest_file_keeps_its_directives(self):
+        """Hạn mức phải phân biệt được mã thật với payload.
+
+        Template literal lồng nhau là thứ _scan_to_closer sinh ra để xử lý, và
+        trên mã thật việc quét đó tuyến tính (đo được nhiều nhất ~1 bước mỗi ký
+        tự). Nếu hạn mức chặn cả những tệp này thì chú thích ignore của anh em
+        im lặng ngừng hoạt động ở mọi tệp đã minify.
+        """
+        dense = "".join(
+            "const t%d = `a${`b${`c${d}`}`}`;\n" % index for index in range(20000)
+        )
+        lines = tuple((dense + "// fortress-scan: ignore-file\n").split("\n"))
+        index = SuppressionIndex.from_lines(lines)
+
+        assert not index.overflowed, "tệp hợp lệ dày đặc lại bị coi là quá phức tạp"
+        assert bool(index), "chỉ thị thật trong tệp dày đặc phải vẫn được nhận"
+
+    def test_config_file_reached_through_a_link_is_not_read(self, tmp_path: Path):
+        """`.fortress-scan.json` tự tìm thấy trong cây quét là dữ liệu không tin
+        cậy, nên nó không được phép là một liên kết.
+
+        Đi theo liên kết ở đây là đọc một tệp NGOÀI thư mục được trỏ tới, kể cả
+        khi --follow-symlinks đang tắt; tên khoá trong tệp đó lại đi thẳng ra
+        stderr, thành ra vừa là oracle vừa là chỗ rò. Ignore file đã chặn đúng
+        chuyện này từ trước, tệp cấu hình thì chưa.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "private.json"
+        secret.write_text(json.dumps({"aws_secret_access_key": 1}), encoding="utf-8")
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "app.py").write_text("value = 1\n", encoding="utf-8")
+        try:
+            (target / ".fortress-scan.json").symlink_to(secret)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation is not permitted in this environment")
+
+        # Khoá lạ trong tệp cấu hình vốn làm cli thoát EXIT_USAGE. Đọc được tệp
+        # ngoài kia thì mã thoát là 2; từ chối liên kết thì lượt quét chạy bình
+        # thường bằng cấu hình mặc định.
+        assert cli.main([str(target), "--quiet"]) == 0
+
+    def test_link_in_place_of_a_config_file_is_reported(self, tmp_path: Path):
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "app.py").write_text("value = 1\n", encoding="utf-8")
+        (target / "elsewhere.json").write_text("{}", encoding="utf-8")
+        try:
+            (target / ".fortress-scan.json").symlink_to(target / "elsewhere.json")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation is not permitted in this environment")
+
+        config, notices = cli._config_from_file(
+            argparse.Namespace(no_config=False, config=None, target=str(target))
+        )
+        assert notices, "bỏ qua tệp cấu hình mà không nói ra thì cũng là im lặng"
+        assert any("liên kết" in line for line in notices)
 
 
 class TestEvasionAttempts:

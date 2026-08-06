@@ -130,6 +130,14 @@ class ConsoleReporter:
             self._write(
                 self._paint("  %d tệp bị bỏ qua, không được phân tích" % stats.files_skipped, "dim")
             )
+        if stats.directories_excluded:
+            self._write(
+                self._paint(
+                    "  %d thư mục bị bỏ theo danh sách loại trừ mặc định (node_modules, dist, build…)"
+                    % stats.directories_excluded,
+                    "dim",
+                )
+            )
         if result.suppressed or result.baselined:
             self._write(
                 self._paint(
