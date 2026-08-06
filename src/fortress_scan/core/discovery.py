@@ -20,12 +20,17 @@ _BINARY_PROBE_BYTES = 8192
 _MAX_STRAY_NULL_BYTES = 4
 
 
+class FileChangedDuringScan(Exception):
+    """Tệp mở ra không còn là tệp đã được liệt kê lúc duyệt cây."""
+
+
 @dataclass(frozen=True)
 class DiscoveredFile:
     path: Path
     relative: str
     language: str
     size: int
+    identity: Optional[Tuple[int, int]] = None
 
 
 class Discovery:
@@ -36,8 +41,10 @@ class Discovery:
         self._explicit = IgnoreSet.from_lines(config.exclude_patterns)
         self._include = IgnoreSet.from_lines(config.include_patterns)
         self._visited_directories: Set[Tuple[int, int]] = set()
+        self._visited_files: Set[Tuple[int, int]] = set()
         self.errors: List[ScanError] = []
         self.skipped = 0
+        self.skipped_links = 0
 
     def walk(self) -> Iterator[DiscoveredFile]:
         if self._root.is_file():
@@ -135,45 +142,75 @@ class Discovery:
         for entry in entries:
             entry_path = Path(entry.path)
             relative = safe_paths.relative_display(self._root, entry_path)
-            try:
-                is_directory = entry.is_dir(follow_symlinks=False)
-            except OSError:
-                continue
 
-            if self._is_link(entry, entry_path):
-                if not self._config.follow_symlinks:
-                    self.skipped += 1
-                    continue
-                if safe_paths.safe_resolve(self._root, entry_path) is None:
-                    self.skipped += 1
-                    self.errors.append(
-                        ScanError(
-                            path=relative,
-                            reason="link-escapes-root",
-                            detail="liên kết trỏ ra ngoài thư mục đang quét",
-                        )
-                    )
-                    continue
+            target = self._resolve_entry(entry, entry_path, relative)
+            if target is None:
+                continue
+            is_directory = self._entry_is_directory(entry, entry_path, target)
+            if is_directory is None:
+                continue
 
             if is_directory:
                 if entry.name in self._excluded:
                     continue
                 if ignore.matches(relative, True):
                     continue
-                subdirectories.append(entry_path)
+                subdirectories.append(target)
                 continue
 
             if ignore.matches(relative, False):
                 continue
             if self._include and not self._include.matches(relative, False):
                 continue
-            candidate = self._consider(entry_path, relative)
+            candidate = self._consider(target, relative, entry_path.name)
             if candidate is not None:
                 yield candidate
 
         for subdirectory in subdirectories:
             for discovered in self._walk_directory(subdirectory, ignore, depth + 1):
                 yield discovered
+
+    def _resolve_entry(
+        self, entry: "os.DirEntry[str]", entry_path: Path, relative: str
+    ) -> Optional[Path]:
+        """Tệp thật mà entry này trỏ tới, hoặc None nếu phải bỏ qua nó."""
+        if not self._is_link(entry, entry_path):
+            return entry_path
+        if not self._config.follow_symlinks:
+            self.skipped += 1
+            self.skipped_links += 1
+            return None
+        resolved = safe_paths.safe_resolve(self._root, entry_path)
+        if resolved is None:
+            self.skipped += 1
+            self.skipped_links += 1
+            self.errors.append(
+                ScanError(
+                    path=relative,
+                    reason="link-escapes-root",
+                    detail="liên kết trỏ ra ngoài thư mục đang quét",
+                )
+            )
+            return None
+        return resolved
+
+    def _entry_is_directory(
+        self, entry: "os.DirEntry[str]", entry_path: Path, target: Path
+    ) -> Optional[bool]:
+        """Hỏi về ĐÍCH, không hỏi về chính liên kết; None nghĩa là không đọc được.
+
+        `is_dir(follow_symlinks=False)` soi lstat của chính liên kết, nên mọi
+        symlink đều trả lời "không phải thư mục" -- kể cả khi nó trỏ tới một
+        thư mục nằm ngay trong phạm vi quét. Lấy câu trả lời đó để quyết định
+        có đi theo liên kết hay không thì cả cây con phía sau nó biến mất khỏi
+        lượt quét, và biến mất trong im lặng.
+        """
+        try:
+            if target is entry_path:
+                return entry.is_dir(follow_symlinks=False)
+            return target.is_dir()
+        except OSError:
+            return None
 
     def _is_link(self, entry: "os.DirEntry[str]", entry_path: Path) -> bool:
         try:
@@ -191,25 +228,34 @@ class Discovery:
         return safe_paths.is_link_like(entry_path)
 
     def _directory_key(self, directory: Path) -> Optional[Tuple[int, int]]:
-        status = os.stat(directory)
-        if status.st_dev == 0 and status.st_ino == 0:
-            return None
-        return (status.st_dev, status.st_ino)
+        return _identity(os.stat(directory))
 
-    def _consider(self, path: Path, relative: str) -> Optional[DiscoveredFile]:
-        if not is_scannable_name(path.name):
+    def _consider(
+        self, path: Path, relative: str, name: Optional[str] = None
+    ) -> Optional[DiscoveredFile]:
+        label = name or path.name
+        if not is_scannable_name(label):
             return None
-        language = detect_language(path)
+        language = detect_language(path, label)
         if language is None:
             return None
         if not safe_paths.is_regular_file(path):
             self.skipped += 1
             return None
         try:
-            size = path.stat().st_size
+            status = path.stat()
         except OSError:
             self.skipped += 1
             return None
+        # Một cây có liên kết thì cùng một tệp tới đây nhiều lần dưới nhiều tên
+        # (workspace kiểu pnpm là cả một rừng như vậy). Quét lại nó không tìm
+        # thêm được gì, chỉ nhân bản phát hiện ra nhiều đường dẫn.
+        identity = _identity(status)
+        if identity is not None:
+            if identity in self._visited_files:
+                return None
+            self._visited_files.add(identity)
+        size = status.st_size
         if size == 0:
             return None
         if size > self._config.max_file_bytes:
@@ -236,7 +282,29 @@ class Discovery:
                 )
             )
             return None
-        return DiscoveredFile(path=path, relative=relative, language=language, size=size)
+        return DiscoveredFile(
+            path=path,
+            relative=relative,
+            language=language,
+            size=size,
+            identity=identity,
+        )
+
+
+def _identity(status: os.stat_result) -> Optional[Tuple[int, int]]:
+    """Danh tính (thiết bị, inode) của một entry, hoặc None nếu không tin được.
+
+    Vài hệ thống tệp trả về 0 cho những trường này -- share mạng, FAT, một số
+    kiểu mount trong container. Coi 0 là một danh tính hợp lệ thì MỌI entry
+    trùng nhau: thư mục thứ hai trở đi bị coi là đã duyệt rồi, và cả lượt quét
+    dừng lại sau thư mục đầu tiên mà không in ra một dòng lỗi nào.
+
+    Không biết chắc thì đừng gộp. Quét trùng chỉ tốn thêm thời gian, còn bỏ
+    sót trong im lặng thì hỏng đúng việc mà công cụ này sinh ra để làm.
+    """
+    if not status.st_dev or not status.st_ino:
+        return None
+    return (status.st_dev, status.st_ino)
 
 
 def _looks_binary(path: Path) -> bool:
@@ -266,8 +334,23 @@ def declared_python_encoding(raw: bytes) -> Optional[str]:
     return encoding
 
 
-def read_source(path: Path, language: Optional[str] = None) -> Tuple[str, bool]:
+def read_source(
+    path: Path,
+    language: Optional[str] = None,
+    identity: Optional[Tuple[int, int]] = None,
+) -> Tuple[str, bool]:
+    """Đọc tệp, và nếu biết danh tính thì kiểm lại đúng thứ vừa mở ra.
+
+    Giữa lúc liệt kê cây và lúc mở tệp có một khoảng trống. Ai ghi được vào
+    cây đang bị quét có thể tráo tệp trong khoảng đó, khiến công cụ phân tích
+    -- và trích đoạn vào báo cáo -- một nội dung khác hẳn thứ đã được xét
+    duyệt. So `fstat` của chính handle đã mở với danh tính ghi nhận lúc duyệt
+    sẽ đóng khoảng trống đó lại, vì kiểm trên handle chứ không kiểm lại
+    đường dẫn.
+    """
     with open(path, "rb") as handle:
+        if identity is not None and _identity(os.fstat(handle.fileno())) != identity:
+            raise FileChangedDuringScan(str(path))
         raw = handle.read()
     if language == PYTHON:
         return _decode_python(raw)

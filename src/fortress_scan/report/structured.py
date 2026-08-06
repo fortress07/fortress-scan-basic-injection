@@ -100,11 +100,45 @@ def to_sarif(result: ScanResult, tool_version: str) -> str:
                 "originalUriBaseIds": {
                     "%SRCROOT%": {"uri": _root_uri(result.root)}
                 },
+                "invocations": [
+                    {
+                        "executionSuccessful": True,
+                        "toolExecutionNotifications": _notifications(result),
+                    }
+                ],
                 "results": results,
             }
         ],
     }
     return json.dumps(document, indent=2) + "\n"
+
+
+def _notifications(result: ScanResult) -> List[Dict[str, Any]]:
+    """Mọi thứ làm hẹp phạm vi quét, đặt vào đúng chỗ của SARIF.
+
+    Không có phần này thì một lượt quét bị tệp cấu hình trong cây mục tiêu bóp
+    còn một nửa vẫn xuất ra tệp SARIF trông y hệt một lượt quét sạch thật sự.
+    """
+    notifications: List[Dict[str, Any]] = []
+    for notice in result.notices:
+        text = "\n".join((notice.summary,) + tuple(notice.details))
+        notifications.append(
+            {
+                "level": "warning",
+                "message": {"text": text},
+                "descriptor": {"id": notice.kind},
+            }
+        )
+    for error in result.errors:
+        detail = " ".join(part for part in (error.reason, error.detail) if part)
+        notifications.append(
+            {
+                "level": "warning",
+                "message": {"text": "%s: %s" % (display_path(error.path), detail)},
+                "descriptor": {"id": error.reason},
+            }
+        )
+    return notifications
 
 
 def _code_flows(finding: Finding) -> List[Dict[str, Any]]:
@@ -167,7 +201,21 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
         "Đã phân tích %d tệp trong %.2f giây."
         % (result.stats.files_analyzed, result.stats.duration_seconds)
     )
+    if result.stats.files_skipped:
+        lines.append("")
+        lines.append("Bỏ qua %d tệp, không được phân tích." % result.stats.files_skipped)
     lines.append("")
+
+    # Đặt trước phần phát hiện, và trước cả nhánh "không có phát hiện nào":
+    # đây chính là lúc người đọc cần biết vì sao báo cáo lại sạch.
+    if result.notices:
+        lines.append("## ⚠️ Phạm vi quét đã bị thu hẹp")
+        lines.append("")
+        for notice in result.notices:
+            lines.append("- %s" % _escape(notice.summary))
+            for detail in notice.details:
+                lines.append("  - %s" % _escape(detail))
+        lines.append("")
 
     if not result.findings:
         lines.append("Không phát hiện lỗ hổng code injection nào.")

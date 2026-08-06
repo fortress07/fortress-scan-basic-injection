@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Dict, Optional, Tuple
 
 PYTHON = "python"
@@ -84,12 +84,18 @@ def is_scannable_name(name: str) -> bool:
     return not name.startswith(".") or name in _FILENAME_MAP
 
 
-def detect_language(path: Path) -> Optional[str]:
-    name = path.name
-    mapped = _FILENAME_MAP.get(name)
+def detect_language(path: Path, name: Optional[str] = None) -> Optional[str]:
+    """`name` tách tên hiển thị khỏi tệp thật trên đĩa.
+
+    Khi đi theo một liên kết, cái tên nằm trong cây được quét là tên của
+    liên kết, còn nội dung nằm ở đích -- nên ngôn ngữ đoán theo tên liên kết
+    nhưng shebang phải đọc từ đích.
+    """
+    label = name or path.name
+    mapped = _FILENAME_MAP.get(label)
     if mapped is not None:
         return mapped
-    suffix = path.suffix.lower()
+    suffix = PurePath(label).suffix.lower()
     mapped = _EXTENSION_MAP.get(suffix)
     if mapped is not None:
         return mapped
