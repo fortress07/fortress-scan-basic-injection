@@ -881,6 +881,160 @@ class TestAliasTrackingStaysPrecise:
         assert rule_ids(source) == []
 
 
+class TestSanitizerNameShadowing:
+    """A shadowed sanitizer name must not hand out the real one's clearance.
+
+    Sink matching is name based, which is safe in the direction that adds a
+    finding. The suppression tables run the other way: trusting a name that no
+    longer reaches the import deletes a real finding and reports nothing at
+    all, so every rebinding the analyzer can see has to revoke that trust.
+    """
+
+    def test_local_object_shadowing_a_sanitizer_module(self):
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "class Fake:\n"
+            "    def quote(self, s):\n"
+            "        return s\n"
+            "def handler():\n"
+            "    shlex = Fake()\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_module_level_shadow_reaches_every_function(self):
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "shlex = None\n"
+            "def handler():\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_parameter_shadowing_a_sanitizer_module(self):
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "def handler(shlex):\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sanitizer_attribute_patched_in_place(self):
+        source = (
+            "import ldap\n"
+            "from flask import request\n"
+            "ldap.filter.escape_filter_chars = lambda s: s\n"
+            "def handler(conn):\n"
+            "    name = request.args.get('v')\n"
+            "    conn.search_s('dc=x', 2, '(cn=' + "
+            "ldap.filter.escape_filter_chars(name) + ')')\n"
+        )
+        assert "FSB-LDAP-001" in rule_ids(source)
+
+    def test_local_def_shadowing_a_builtin_sanitizer(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def int(s):\n"
+            "    return s\n"
+            "def handler():\n"
+            "    os.system('echo ' + int(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_shadowed_builtin_does_not_clear_sql_either(self):
+        """``int`` clears every category, so shadowing it would hide SQL too."""
+        source = (
+            "from flask import request\n"
+            "def int(s):\n"
+            "    return s\n"
+            "def handler(cur):\n"
+            "    cur.execute('select * from users where id = ' + int(request.args.get('id')))\n"
+        )
+        assert "FSB-SQL-001" in rule_ids(source)
+
+    def test_shadowed_trusted_producer(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "class J:\n"
+            "    def dumps(self, o):\n"
+            "        return o\n"
+            "json = J()\n"
+            "def handler():\n"
+            "    os.system('echo ' + json.dumps(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_shadow_laundered_through_an_alias(self):
+        """Taking the alias from a shadowed module must not launder it clean."""
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "class Fake:\n"
+            "    def quote(self, s):\n"
+            "        return s\n"
+            "def handler():\n"
+            "    shlex = Fake()\n"
+            "    q = shlex.quote\n"
+            "    os.system('echo ' + q(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_unsafe_yaml_loader_wearing_a_safe_name(self):
+        """The loader is recognised by name alone, so the name must be its own."""
+        source = (
+            "import yaml\n"
+            "from flask import request\n"
+            "SafeLoader = yaml.UnsafeLoader\n"
+            "def handler():\n"
+            "    return yaml.load(request.data, Loader=SafeLoader)\n"
+        )
+        assert "FSB-DESER-001" in rule_ids(source)
+
+    def test_safe_yaml_loader_attribute_patched_in_place(self):
+        source = (
+            "import yaml\n"
+            "from flask import request\n"
+            "yaml.SafeLoader = yaml.UnsafeLoader\n"
+            "def handler():\n"
+            "    return yaml.load(request.data, Loader=yaml.SafeLoader)\n"
+        )
+        assert "FSB-DESER-001" in rule_ids(source)
+
+    def test_genuine_safe_yaml_loader_stays_clean(self):
+        source = (
+            "import yaml\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    return yaml.load(request.data, Loader=yaml.SafeLoader)\n"
+        )
+        assert rule_ids(source) == []
+
+    def test_unshadowed_sanitizers_are_untouched(self):
+        """The guard must cost nothing where no name was rebound."""
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "import html\n"
+            "from flask import request\n"
+            "def command():\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+            "def markup():\n"
+            "    return '<b>' + html.escape(request.args.get('v')) + '</b>'\n"
+            "def numeric(cur):\n"
+            "    cur.execute('select * from t where id = ' + str(int(request.args.get('id'))))\n"
+        )
+        assert rule_ids(source) == []
+
+
 class TestDocumentedGaps:
     def test_gap_taint_across_files_is_not_tracked(self, tmp_path: Path):
         (tmp_path / "helpers.py").write_text(
