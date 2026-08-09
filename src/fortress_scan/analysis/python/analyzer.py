@@ -663,22 +663,35 @@ class Evaluator:
         targets = _call_targets(node, qualname, callee, dotted)
         effective = targets[0].qualname if targets else None
 
-        self._check_sink(node, targets, argument_values, keyword_values)
+        self._check_sink(node, targets, argument_values, keyword_values, env)
 
         if effective is not None:
-            if effective in specs.TRUSTED_PRODUCERS:
-                return Value(constant=False, sanitized=True)
-            cleared = specs.SANITIZERS.get(effective)
-            if cleared is not None:
-                return self._sanitized(argument_values, keyword_values, cleared)
-            weakened = specs.WEAK_SANITIZERS.get(effective)
-            if weakened is not None:
-                aggregate = combine(*argument_values) if argument_values else UNKNOWN
-                if aggregate.taint is None:
+            # Only these three tables turn a finding off, and they are keyed by
+            # the name an API is imported under, so each entry holds only while
+            # that name still reaches the import. Sinks and sources keep
+            # matching on the bare name: a shadow missed there costs an extra
+            # finding, one missed here deletes a real one.
+            suppresses = (
+                effective in specs.TRUSTED_PRODUCERS
+                or effective in specs.SANITIZERS
+                or effective in specs.WEAK_SANITIZERS
+            )
+            if suppresses and self._suppression_applies(targets[0], node, callee, dotted, env):
+                if effective in specs.TRUSTED_PRODUCERS:
                     return Value(constant=False, sanitized=True)
-                return Value(
-                    taint=aggregate.taint.weakened_for(weakened), constant=False, sanitized=True
-                )
+                cleared = specs.SANITIZERS.get(effective)
+                if cleared is not None:
+                    return self._sanitized(argument_values, keyword_values, cleared)
+                weakened = specs.WEAK_SANITIZERS.get(effective)
+                if weakened is not None:
+                    aggregate = combine(*argument_values) if argument_values else UNKNOWN
+                    if aggregate.taint is None:
+                        return Value(constant=False, sanitized=True)
+                    return Value(
+                        taint=aggregate.taint.weakened_for(weakened),
+                        constant=False,
+                        sanitized=True,
+                    )
             source = specs.SOURCE_CALLS.get(effective)
             if source is not None and self._source_enabled(source):
                 return self._tainted(node, source)
@@ -729,6 +742,39 @@ class Evaluator:
             sanitized=sanitized,
             callables=produced,
         )
+
+    def _rebound(self, path: str, env: Environment) -> bool:
+        """Whether anything in scope has taken this dotted name over.
+
+        ``import`` never writes to ``env`` while assignments, parameters, loop
+        targets and ``except`` names do, so a binding on the path -- or on any
+        receiver it hangs off -- means the name no longer reaches the module it
+        was imported from. A ``def`` or a class method of the same name shadows
+        it as well, which is what the sink side already assumes.
+        """
+        if path in env or path in self.module.functions:
+            return True
+        parts = path.split(".")
+        return any(".".join(parts[:index]) in env for index in range(1, len(parts)))
+
+    def _suppression_applies(
+        self,
+        target: CallableRef,
+        node: ast.Call,
+        callee: Value,
+        dotted: Optional[str],
+        env: Environment,
+    ) -> bool:
+        """Whether a suppression entry still describes what this call runs."""
+        if callee.callables:
+            # Matched through a tracked value, so the name here is only an
+            # alias and rebinding it is how the alias was made. What still has
+            # to hold is that the API it was taken from was not itself shadowed
+            # before the alias was read.
+            return target.receiver is None or not self._rebound(target.receiver, env)
+        if isinstance(node.func, ast.Name):
+            return not self._rebound(node.func.id, env)
+        return dotted is None or not self._rebound(dotted, env)
 
     def _sanitized(
         self,
@@ -842,9 +888,10 @@ class Evaluator:
         targets: Sequence[CallableRef],
         argument_values: Sequence[Value],
         keyword_values: Dict[str, Value],
+        env: Environment,
     ) -> None:
         for target in targets:
-            self._check_sink_target(node, target, argument_values, keyword_values)
+            self._check_sink_target(node, target, argument_values, keyword_values, env)
 
     def _check_sink_target(
         self,
@@ -852,6 +899,7 @@ class Evaluator:
         target: CallableRef,
         argument_values: Sequence[Value],
         keyword_values: Dict[str, Value],
+        env: Environment,
     ) -> None:
         if target.qualname in self.module.functions:
             return
@@ -866,7 +914,7 @@ class Evaluator:
             return
 
         condition = spec.condition
-        if condition == specs.YAML_LOAD and self._yaml_is_safe(node, keyword_values):
+        if condition == specs.YAML_LOAD and self._yaml_is_safe(node, keyword_values, env):
             return
         if condition == specs.NUMPY_LOAD and not _keyword_is_true(node, "allow_pickle"):
             return
@@ -1014,7 +1062,9 @@ class Evaluator:
                 return True
         return False
 
-    def _yaml_is_safe(self, node: ast.Call, keyword_values: Dict[str, Value]) -> bool:
+    def _yaml_is_safe(
+        self, node: ast.Call, keyword_values: Dict[str, Value], env: Environment
+    ) -> bool:
         loader_node: Optional[ast.AST] = None
         for keyword in node.keywords:
             if keyword.arg == "Loader":
@@ -1025,6 +1075,10 @@ class Evaluator:
             return False
         dotted = dotted_name(loader_node)
         if dotted is None:
+            return False
+        # The loader is recognised by name alone, so a rebound name would let
+        # an unsafe loader wear a safe one's spelling and take the sink away.
+        if self._rebound(dotted, env):
             return False
         return dotted.rsplit(".", 1)[-1] in specs.SAFE_YAML_LOADERS
 
