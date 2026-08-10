@@ -525,7 +525,7 @@ class Evaluator:
             self._bind(node.target, value, env)
             return value
         if isinstance(node, ast.Lambda):
-            return UNKNOWN
+            return self._eval_lambda(node, env)
         if isinstance(node, ast.Slice):
             for part in (node.lower, node.upper, node.step):
                 self._eval(part, env)
@@ -635,6 +635,28 @@ class Evaluator:
             sanitized=aggregate.sanitized,
         )
 
+    def _eval_lambda(self, node: ast.Lambda, env: Environment) -> Value:
+        """Đi vào thân lambda, rồi trả về UNKNOWN cho chính giá trị lambda.
+
+        Trả UNKNOWN mà KHÔNG đọc thân là một điểm mù trọn vẹn, không phải một
+        phép xấp xỉ: `handler = lambda: eval(request.args.get("x"))` không sinh
+        ra phát hiện nào, trong khi đúng dòng đó viết bằng `def` lại là CRITICAL.
+        Lambda là node biểu thức duy nhất vứt cả cây con của mình -- Slice còn
+        đọc các phần của nó, và nhánh mặc định ở cuối _eval vẫn duyệt con.
+        Ai muốn giấu một sink chỉ cần đổi `def` thành `lambda`.
+
+        Thân lambda được đọc trong một bản sao môi trường, đúng cách
+        _eval_comprehension làm: tham số của lambda che tên trùng ở ngoài (giá
+        trị lúc gọi là thứ ta không biết), còn tên tự do vẫn thấy được giá trị
+        đang có ở chỗ định nghĩa. Giá trị mặc định thì tính ngay tại đây, vì
+        Python cũng tính chúng ở đúng thời điểm này.
+        """
+        scope = copy_environment(env)
+        for name, default in _lambda_parameters(node.args):
+            scope[name] = self._eval(default, env) if default is not None else UNKNOWN
+        self._eval(node.body, scope)
+        return UNKNOWN
+
     def _eval_call(self, node: ast.Call, env: Environment) -> Value:
         qualname = self.imports.qualname_of(node.func)
         argument_values = [self._eval(argument, env) for argument in node.args]
@@ -657,7 +679,11 @@ class Evaluator:
                 callee = env.get(dotted, UNKNOWN)
         elif isinstance(node.func, ast.Name):
             callee = env.get(node.func.id, UNKNOWN)
-        elif isinstance(node.func, (ast.Call, ast.Subscript, ast.IfExp)):
+        elif isinstance(node.func, (ast.Call, ast.Subscript, ast.IfExp, ast.Lambda)):
+            # ast.Lambda có mặt ở đây vì dạng gọi-ngay `(lambda: sink())()`:
+            # callee vẫn là UNKNOWN như trước, nhưng _eval_lambda mới là chỗ đọc
+            # thân lambda. Không đi qua đây thì thân đó lại thành điểm mù, đúng
+            # cái vừa bịt -- chỉ khác chỗ đặt dấu ngoặc.
             callee = self._eval(node.func, env)
 
         targets = _call_targets(node, qualname, callee, dotted)
@@ -1156,6 +1182,32 @@ def _parameter_names(arguments: ast.arguments) -> Tuple[str, ...]:
     if arguments.kwarg is not None:
         names.append(arguments.kwarg.arg)
     return tuple(names)
+
+
+def _lambda_parameters(
+    arguments: ast.arguments,
+) -> Tuple[Tuple[str, Optional[ast.expr]], ...]:
+    """Từng tham số kèm biểu thức mặc định của nó, hoặc None nếu không có.
+
+    `defaults` xếp thẳng hàng với phần ĐUÔI của posonlyargs + args, còn
+    `kw_defaults` xếp một-đối-một với kwonlyargs và mang None ở chỗ khuyết.
+    `*args`/`**kwargs` không bao giờ có mặc định.
+    """
+    positional = list(getattr(arguments, "posonlyargs", []) or []) + list(arguments.args)
+    defaults: List[Optional[ast.expr]] = [None] * (
+        len(positional) - len(arguments.defaults)
+    ) + list(arguments.defaults)
+
+    pairs: List[Tuple[str, Optional[ast.expr]]] = [
+        (argument.arg, default) for argument, default in zip(positional, defaults)
+    ]
+    if arguments.vararg is not None:
+        pairs.append((arguments.vararg.arg, None))
+    for argument, default in zip(arguments.kwonlyargs, arguments.kw_defaults):
+        pairs.append((argument.arg, default))
+    if arguments.kwarg is not None:
+        pairs.append((arguments.kwarg.arg, None))
+    return tuple(pairs)
 
 
 def _bind_arguments(
