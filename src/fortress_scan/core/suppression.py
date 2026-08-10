@@ -2,8 +2,20 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 
+from ..languages import (
+    CSHARP,
+    GO,
+    JAVA,
+    JAVASCRIPT,
+    MANIFEST,
+    PHP,
+    PYTHON,
+    RUBY,
+    SHELL,
+    TYPESCRIPT,
+)
 from .model import Finding
 
 # Nhánh dài phải đứng trước: lựa chọn trong regex là "khớp cái đầu tiên", nên
@@ -61,7 +73,93 @@ class _MaskBudget:
 # Chỉ thị nằm trong một chuỗi không phải là chỉ thị. Một dòng như
 # HELP = "# fortress-scan: ignore-file" trông vô hại với người đọc nhưng lại
 # tắt cả tệp, và im lặng -- nên nội dung chuỗi bị xoá trắng trước khi dò.
-_COMMENT_MARKERS: Tuple[str, ...] = ("<!--", "/*", "//", "--", "#")
+#
+# Dấu mở chú thích phải tra theo TỪNG ngôn ngữ. Một danh sách gộp chung là lỗ
+# hổng thật, vì mỗi dấu trong đó lại là toán tử hợp lệ ở một ngôn ngữ khác:
+# `//` là phép chia nguyên của Python, `--` là toán tử giảm của JS/Java/C#/PHP,
+# `#` là trường riêng tư của JavaScript. Gặp một trong số đó, _mask_line kết
+# luận "chú thích bắt đầu từ đây" và GIỮ NGUYÊN phần còn lại của dòng -- kể cả
+# một hằng chuỗi nằm sau nó. Thế là dòng
+#     mid = (lo + hi) // 2 ; NOTE = "# fortress-scan: ignore-file"
+# tắt sạch phát hiện của cả tệp, dù trong đó không có lấy một chú thích nào và
+# người review đọc qua cũng không thấy gì bất thường.
+#
+# `--` biến mất khỏi mọi ngôn ngữ: nó không mở chú thích ở bất kỳ ngôn ngữ nào
+# công cụ này đọc được, nên giữ lại chỉ còn tác dụng làm đường lách.
+_LINE_COMMENTS: Dict[str, Tuple[str, ...]] = {
+    PYTHON: ("#",),
+    JAVASCRIPT: ("//",),
+    TYPESCRIPT: ("//",),
+    PHP: ("//", "#"),
+    JAVA: ("//",),
+    RUBY: ("#",),
+    GO: ("//",),
+    CSHARP: ("//",),
+    SHELL: ("#",),
+    MANIFEST: ("//",),
+}
+
+# Trong shell, `#` chỉ mở chú thích khi nó BẮT ĐẦU một từ. `curl http://x/#frag`
+# là một đối số bình thường, không phải chú thích -- mà chỉ cần coi nhầm là chú
+# thích thì phần đuôi dòng lọt ra nguyên vẹn và
+# `curl http://x/#frag; M="# fortress-scan: ignore-file"` lại tắt được cả tệp.
+# Python, Ruby và PHP không có luật này: ở đó `x=1#ghi chú` đúng là chú thích.
+_WORD_START_LINE_COMMENTS: FrozenSet[str] = frozenset({SHELL})
+
+# Chú thích khối phải được đóng lại chứ không nuốt trọn phần đuôi dòng: sau
+# `*/` là mã thật, và mã thật thì có thể chứa chuỗi. Bỏ qua chuyện đó thì
+# `/* ghi chú */ NOTE = "# fortress-scan: ignore-file"` lại là một đường lách y
+# hệt trường hợp trên.
+#
+# `<!--` KHÔNG có mặt ở đây, dù `.jsp`, `.erb`, `.phtml`, `.cshtml`, `.aspx`,
+# `.vue` và `.svelte` đều là tệp lai HTML. Lý do: `a <!--b` là biểu thức hợp lệ
+# trong Java, C#, JavaScript và PHP (`a < !(--b)`), nên nhận `<!--` làm dấu mở
+# chú thích lại mở đúng đường lách vừa bịt.
+#
+# Bỏ nó đi không làm mất chỉ thị thật, vì bảng này KHÔNG phải là thứ cho phép
+# một chỉ thị chạy: _mask_line chép nguyên văn mọi ký tự không nằm trong chuỗi,
+# nên `<!-- fortress-scan: ignore-file -->` vẫn tới được bộ dò như thường. Bảng
+# này chỉ quyết định một chuyện: có phơi nguyên phần đuôi dòng ra hay không.
+_C_COMMENT: Tuple[str, str] = ("/*", "*/")
+_BLOCK_COMMENTS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    PYTHON: (),
+    JAVASCRIPT: (_C_COMMENT,),
+    TYPESCRIPT: (_C_COMMENT,),
+    PHP: (_C_COMMENT,),
+    JAVA: (_C_COMMENT,),
+    RUBY: (),
+    GO: (_C_COMMENT,),
+    CSHARP: (_C_COMMENT,),
+    SHELL: (),
+    MANIFEST: (_C_COMMENT,),
+}
+
+# Ngôn ngữ lạ thì nhận cả hai dấu phổ biến: thà nhận dư một dấu mở chú thích còn
+# hơn bỏ qua chỉ thị thật của người dùng ở một định dạng chưa khai báo. Mọi lối
+# vào thật đều truyền language, nên nhánh này không chạm mã được quét.
+_DEFAULT_LINE_COMMENTS: Tuple[str, ...] = ("//", "#")
+_DEFAULT_BLOCK_COMMENTS: Tuple[Tuple[str, str], ...] = (_C_COMMENT,)
+
+
+@dataclass(frozen=True)
+class _CommentSyntax:
+    """Dấu mở chú thích của một ngôn ngữ, đã sắp dài trước ngắn."""
+
+    line: Tuple[str, ...]
+    block: Tuple[Tuple[str, str], ...]
+    word_start_only: bool = False
+
+
+def comment_syntax(language: Optional[str]) -> _CommentSyntax:
+    if language is None:
+        return _CommentSyntax(_DEFAULT_LINE_COMMENTS, _DEFAULT_BLOCK_COMMENTS)
+    return _CommentSyntax(
+        _LINE_COMMENTS.get(language, _DEFAULT_LINE_COMMENTS),
+        _BLOCK_COMMENTS.get(language, _DEFAULT_BLOCK_COMMENTS),
+        language in _WORD_START_LINE_COMMENTS,
+    )
+
+
 _TRIPLE_QUOTES: Tuple[str, ...] = ('"""', "'''")
 _LINE_QUOTES: Tuple[str, ...] = ('"', "'", "`")
 # Chuỗi một nháy không bắc qua dòng; chỉ ba nháy và backtick mới bắc được.
@@ -132,12 +230,24 @@ def _scan_to_closer(
     return -1
 
 
-def _close_open_string(raw: str, index: int, delimiter: str) -> Tuple[str, int, Optional[str]]:
-    """Xoá phần thân của một chuỗi đang mở cho tới dấu đóng của nó."""
+Pending = Tuple[str, bool]
+
+
+def _close_region(
+    raw: str, index: int, delimiter: str, keep: bool
+) -> Tuple[str, int, Optional[Pending]]:
+    """Đọc tới dấu đóng của một vùng đang mở, bắc qua dòng nếu cần.
+
+    `keep` phân biệt hai loại vùng. Thân chuỗi bị xoá trắng vì chỉ thị nằm
+    trong đó là dữ liệu. Thân chú thích khối được giữ nguyên vì chỉ thị nằm
+    trong đó là chú thích thật.
+    """
     end = raw.find(delimiter, index)
     if end < 0:
-        return " " * (len(raw) - index), len(raw), delimiter
-    return " " * (end - index) + delimiter, end + len(delimiter), None
+        body = raw[index:] if keep else " " * (len(raw) - index)
+        return body, len(raw), (delimiter, keep)
+    body = raw[index:end] if keep else " " * (end - index)
+    return body + delimiter, end + len(delimiter), None
 
 
 def _consume_quoted(
@@ -171,24 +281,49 @@ def _consume_quoted(
     return "".join(pieces), length, quote if quote in _SPANNING_QUOTES else None
 
 
+def _starts_block_comment(
+    raw: str, index: int, blocks: Tuple[Tuple[str, str], ...]
+) -> Optional[Tuple[str, str]]:
+    for opener, closer in blocks:
+        if raw.startswith(opener, index):
+            return opener, closer
+    return None
+
+
+def _starts_line_comment(raw: str, index: int, syntax: _CommentSyntax) -> bool:
+    if _starts_with_any(raw, index, syntax.line) is None:
+        return False
+    if not syntax.word_start_only:
+        return True
+    return index == 0 or raw[index - 1].isspace()
+
+
 def _mask_line(
-    raw: str, pending: Optional[str], budget: _MaskBudget
-) -> Tuple[str, Optional[str]]:
+    raw: str, pending: Optional[Pending], budget: _MaskBudget, syntax: _CommentSyntax
+) -> Tuple[str, Optional[Pending]]:
     pieces: List[str] = []
     index = 0
     length = len(raw)
     while index < length:
         if pending is not None:
-            text, index, pending = _close_open_string(raw, index, pending)
+            delimiter, keep = pending
+            text, index, pending = _close_region(raw, index, delimiter, keep)
             pieces.append(text)
             continue
-        if _starts_with_any(raw, index, _COMMENT_MARKERS) is not None:
+        block = _starts_block_comment(raw, index, syntax.block)
+        if block is not None:
+            opener, closer = block
+            pieces.append(opener)
+            text, index, pending = _close_region(raw, index + len(opener), closer, True)
+            pieces.append(text)
+            continue
+        if _starts_line_comment(raw, index, syntax):
             pieces.append(raw[index:])
             break
         opener = _starts_with_any(raw, index, _TRIPLE_QUOTES)
         if opener is not None:
             pieces.append(opener)
-            text, index, pending = _close_open_string(raw, index + len(opener), opener)
+            text, index, pending = _close_region(raw, index + len(opener), opener, False)
             pieces.append(text)
             continue
         quote = _starts_with_any(raw, index, _LINE_QUOTES)
@@ -201,7 +336,9 @@ def _mask_line(
     return "".join(pieces), pending
 
 
-def _mask_string_literals(lines: Sequence[str]) -> List[str]:
+def _mask_string_literals(
+    lines: Sequence[str], syntax: _CommentSyntax
+) -> List[str]:
     """Thay nội dung chuỗi bằng khoảng trắng, giữ nguyên phần chú thích.
 
     Dấu mở chú thích được xét trước dấu nháy, nên dấu nháy đơn nằm trong chính
@@ -209,9 +346,9 @@ def _mask_string_literals(lines: Sequence[str]) -> List[str]:
     """
     budget = _MaskBudget(_mask_step_allowance(lines))
     masked: List[str] = []
-    pending: Optional[str] = None
+    pending: Optional[Pending] = None
     for raw in lines:
-        text, pending = _mask_line(raw, pending, budget)
+        text, pending = _mask_line(raw, pending, budget, syntax)
         masked.append(text)
     return masked
 
@@ -253,13 +390,15 @@ class SuppressionIndex:
         return self._overflowed
 
     @classmethod
-    def from_lines(cls, lines: Sequence[str]) -> "SuppressionIndex":
+    def from_lines(
+        cls, lines: Sequence[str], language: Optional[str] = None
+    ) -> "SuppressionIndex":
         window = lines[:_MAX_LINES]
         # Đa số tệp không nhắc tới công cụ này; khỏi cần xoá chuỗi làm gì.
         if not any("fortress-scan" in text for text in window):
             return cls(())
         try:
-            masked = _mask_string_literals(window)
+            masked = _mask_string_literals(window, comment_syntax(language))
         except _MaskExhausted:
             return cls((), overflowed=True)
         found: List[Suppression] = []

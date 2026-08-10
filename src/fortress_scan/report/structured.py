@@ -120,6 +120,27 @@ def _notifications(result: ScanResult) -> List[Dict[str, Any]]:
     còn một nửa vẫn xuất ra tệp SARIF trông y hệt một lượt quét sạch thật sự.
     """
     notifications: List[Dict[str, Any]] = []
+    # Chú thích `fortress-scan: ignore` nằm trong chính mã được quét, nên nó là
+    # thứ người viết repo điều khiển được -- đúng loại dữ liệu không tin cậy như
+    # .fortress-scan.json ở trên. Console có đếm và nói ra, SARIF thì không, mà
+    # SARIF mới là đường đi vào code scanning của CI: một phát hiện critical bị
+    # một dòng chú thích che đi từng xuất ra tệp SARIF rỗng hoàn toàn, không một
+    # dấu vết nào cho người đọc biết là đã có thứ bị gỡ.
+    if result.suppressed or result.baselined:
+        notifications.append(
+            {
+                "level": "warning",
+                "message": {
+                    "text": (
+                        "%d phát hiện bị ẩn bởi chú thích fortress-scan: ignore trong mã "
+                        "được quét, %d bị ẩn bởi baseline; chạy lại với "
+                        "--no-inline-suppressions và bỏ --baseline để thấy đầy đủ"
+                        % (result.suppressed, result.baselined)
+                    )
+                },
+                "descriptor": {"id": "findings-suppressed"},
+            }
+        )
     for notice in result.notices:
         text = "\n".join((notice.summary,) + tuple(notice.details))
         notifications.append(
@@ -190,7 +211,10 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
     counts = result.counts_by_severity()
     lines.append("# Báo cáo Fortress Scan")
     lines.append("")
-    lines.append("Đã quét `%s` bằng Fortress Scan %s." % (display_path(result.root), tool_version))
+    lines.append(
+        "Đã quét %s bằng Fortress Scan %s."
+        % (_inline_code(display_path(result.root)), tool_version)
+    )
     lines.append("")
     lines.append("| Mức độ | Số lượng |")
     lines.append("| --- | --- |")
@@ -204,6 +228,16 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
     if result.stats.files_skipped:
         lines.append("")
         lines.append("Bỏ qua %d tệp, không được phân tích." % result.stats.files_skipped)
+    # Cùng lý do với thông báo `findings-suppressed` của SARIF: console có đếm số
+    # phát hiện bị chú thích trong mã che đi, còn bản Markdown thì từng im lặng --
+    # và Markdown mới là bản người ta dán vào ticket hay gửi cho nhau đọc.
+    if result.suppressed or result.baselined:
+        lines.append("")
+        lines.append(
+            "**%d phát hiện bị ẩn** bởi chú thích `fortress-scan: ignore` trong mã được "
+            "quét, %d bị ẩn bởi baseline. Chạy lại với `--no-inline-suppressions` và bỏ "
+            "`--baseline` để thấy đầy đủ." % (result.suppressed, result.baselined)
+        )
     lines.append("")
 
     # Đặt trước phần phát hiện, và trước cả nhánh "không có phát hiện nào":
@@ -231,8 +265,10 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
         )
         lines.append("")
         lines.append(
-            "- Vị trí: `%s:%d:%d`"
-            % (display_path(finding.path), finding.line, finding.column)
+            "- Vị trí: %s"
+            % _inline_code(
+                "%s:%d:%d" % (display_path(finding.path), finding.line, finding.column)
+            )
         )
         lines.append(
             "- Mức độ: **%s** | Độ tin cậy: %s | Nhóm: %s"
@@ -247,17 +283,18 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
         lines.append(_escape(finding.message))
         lines.append("")
         if finding.snippet:
-            lines.append("```")
+            fence = _fence(finding.snippet)
+            lines.append(fence)
             lines.append(finding.snippet)
-            lines.append("```")
+            lines.append(fence)
             lines.append("")
         if finding.trace:
             lines.append("Đường đi của dữ liệu:")
             lines.append("")
             for step in finding.trace:
                 lines.append(
-                    "1. dòng %d - %s (`%s`)"
-                    % (step.line, _escape(step.label), _escape(step.code))
+                    "1. dòng %d - %s (%s)"
+                    % (step.line, _escape(step.label), _inline_code(neutralize(step.code)))
                 )
             lines.append("")
         lines.append("**Cách khắc phục.** %s" % _escape(rule.remediation))
@@ -283,4 +320,45 @@ def _escape(text: str) -> str:
     # không vỡ, còn escape sequence của terminal thì đi xuyên qua nguyên vẹn và
     # nổ ra khi ai đó cat tệp .md hoặc để CI in nó vào log. JSON và SARIF thoát
     # nạn này nhờ json.dumps, Markdown thì không có ai lo hộ.
-    return neutralize(text).replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
+    #
+    # ` [ ] đi kèm vì chúng cũng là cú pháp: một dấu ` lẻ mở ra vùng mã và nuốt
+    # phần sau nó, còn [chữ](http://...) là một liên kết thật trong báo cáo mà
+    # người đọc tưởng do công cụ viết ra. Dấu gạch chéo ngược ở đây vô hình khi
+    # render, nên không đánh đổi gì về mặt đọc.
+    escaped = neutralize(text).replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
+    return escaped.replace("`", "\\`").replace("[", "\\[").replace("]", "\\]")
+
+
+def _longest_backtick_run(text: str) -> int:
+    longest = 0
+    current = 0
+    for char in text:
+        if char == "`":
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _fence(text: str) -> str:
+    """Hàng rào dài hơn mọi chuỗi dấu ` có trong nội dung.
+
+    Hàng rào cứng ba dấu là một lỗ hổng: trích đoạn mã là do người viết tệp
+    được quét soạn ra, nên chỉ cần đặt ``` vào giữa dòng là khối mã đóng sớm và
+    phần đuôi rơi ra ngoài thành Markdown thật -- đủ để nhét HTML, liên kết,
+    hay nguyên một mục "Các phát hiện" giả vào bản báo cáo mà người ta đang đọc
+    để ra quyết định.
+    """
+    return "`" * max(3, _longest_backtick_run(text) + 1)
+
+
+def _inline_code(text: str) -> str:
+    """Vùng mã nội dòng cho một chuỗi đến từ tệp được quét.
+
+    Cùng lý do với _fence, chỉ khác là CommonMark còn đòi thêm một khoảng trắng
+    đệm khi nội dung bắt đầu hoặc kết thúc bằng dấu `.
+    """
+    ticks = "`" * (_longest_backtick_run(text) + 1)
+    padding = " " if text.startswith("`") or text.endswith("`") else ""
+    return "%s%s%s%s%s" % (ticks, padding, text, padding, ticks)

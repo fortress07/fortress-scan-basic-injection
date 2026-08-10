@@ -133,7 +133,7 @@ def scan_source(
     )
     findings, _ = _analyze_unit(unit, settings)
     if settings.honor_inline_suppressions:
-        index = suppression_module.SuppressionIndex.from_lines(unit.lines)
+        index = suppression_module.SuppressionIndex.from_lines(unit.lines, unit.language)
         findings, _ = suppression_module.partition(findings, index)
     return sorted(findings, key=lambda item: item.sort_key)
 
@@ -206,7 +206,7 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
 
     outcome.analyzed = True
     if config.honor_inline_suppressions:
-        index = suppression_module.SuppressionIndex.from_lines(unit.lines)
+        index = suppression_module.SuppressionIndex.from_lines(unit.lines, unit.language)
         if index.overflowed and outcome.error is None:
             outcome.error = ScanError(
                 path=discovered.relative,
