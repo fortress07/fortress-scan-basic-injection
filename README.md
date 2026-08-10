@@ -340,9 +340,46 @@ khi đọc mã lạ:
 | `# fortress-scan: ignore-next-line` | dòng ngay bên dưới |
 | `# fortress-scan: ignore-file` | **toàn bộ tệp** |
 
-Giới hạn theo rule bằng `# fortress-scan: ignore [FSB-CMD-001]`. Chú thích dùng được với `#`, `//`,
-`/*`, `--` và `<!--`. Chỉ thị **nằm trong chuỗi không được tính** - `HELP = "# fortress-scan:
-ignore-file"` chỉ là dữ liệu, không tắt gì hết.
+Giới hạn theo rule bằng `# fortress-scan: ignore [FSB-CMD-001]`. Chỉ thị **nằm trong chuỗi không
+được tính** - `HELP = "# fortress-scan: ignore-file"` chỉ là dữ liệu, không tắt gì hết.
+
+Viết chỉ thị bằng `#`, `//`, `/* */` hay `<!-- -->` đều được, như trước.
+
+Điều đổi là **cách công cụ nhận ra đâu là chú thích thật** khi đi xoá nội dung chuỗi: nó tra theo
+đúng ngôn ngữ của tệp thay vì dùng chung một danh sách cho tất cả.
+
+| Ngôn ngữ | Được coi là mở chú thích |
+| --- | --- |
+| Python | `#` |
+| Shell | `#`, và phải đứng đầu một từ |
+| JavaScript, TypeScript, Java/JVM, C#, Go | `//`, `/* */` |
+| PHP | `//`, `#`, `/* */` |
+| Ruby | `#` |
+
+Dùng chung một danh sách là một đường lách thật, vì mỗi dấu trong đó lại là **toán tử hợp lệ** ở ngôn
+ngữ khác: `//` là phép chia nguyên của Python, `--` là toán tử giảm của JS/Java/C#/PHP, `#` là trường
+riêng tư của JavaScript, còn `a <!--b` là `a < !(--b)` ở cả bốn ngôn ngữ họ C. Gặp một trong số đó,
+bộ mặt nạ kết luận "chú thích bắt đầu từ đây" rồi để nguyên phần đuôi dòng - kể cả hằng chuỗi nằm
+sau nó. Thế là những dòng dưới đây, **không dòng nào có lấy một chú thích**, từng tắt sạch phát hiện
+của cả tệp:
+
+```python
+mid = (lo + hi) // 2 ; NOTE = "# fortress-scan: ignore-file"      # Python
+```
+```javascript
+let i = 5; i--; const NOTE = "// fortress-scan: ignore-file";     // JavaScript
+```
+```bash
+curl http://example.com/#frag; MSG="# fortress-scan: ignore-file" # Shell
+```
+
+Chú thích khối giờ **đóng lại đúng chỗ** thay vì nuốt trọn phần đuôi dòng, nên `/* ghi chú */ NOTE =
+"..."` cũng không còn lách được.
+
+Khi một chỉ thị ( hoặc một baseline ) gỡ được phát hiện nào ra khỏi báo cáo, **bản SARIF và bản
+Markdown cũng nói ra**, dưới mã `findings-suppressed`. Trước đây chỉ màn hình console đếm, còn SARIF
+- tức là đường đi vào code scanning của CI - xuất ra một tệp rỗng không phân biệt được với một lượt
+quét sạch thật sự.
 
 Nếu ae quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi ( tắt rule, loại trừ
 đường dẫn, nâng ngưỡng, hạ giới hạn kích thước… ), công cụ **nói rõ nó đã tắt những gì**. Một báo cáo

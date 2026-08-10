@@ -274,6 +274,132 @@ class TestAttacksOnTheScanner:
         assert any("liên kết" in line for line in notices)
 
 
+class TestSinkHiddenInsideALambda:
+    """Đổi `def` thành `lambda` từng là cách giấu một sink trọn vẹn.
+
+    ast.Lambda là node biểu thức duy nhất trả về UNKNOWN mà không đọc cây con
+    của mình, nên cả thân lambda chưa từng được duyệt: không taint, mà cũng
+    không cả rule "biểu thức không phải hằng". Comprehension, generator và
+    `def` lồng nhau đều được đọc -- chỉ lambda là điểm mù.
+    """
+
+    def test_source_to_sink_entirely_inside_a_lambda(self):
+        source = (
+            "from flask import request\n"
+            "handler = lambda: eval(request.args.get('x'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_lambda_closes_over_a_tainted_local(self):
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    run = lambda: eval(payload)\n"
+            "    return run\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_lambda_hidden_in_a_call_argument(self):
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    return sorted([1], key=lambda item: eval(payload))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_taint_carried_in_through_a_default_argument(self):
+        """Mặc định được tính tại chỗ định nghĩa, đúng như Python làm."""
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    run = lambda q=payload: eval(q)\n"
+            "    return run\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_parameter_shadows_the_enclosing_name(self):
+        """Tham số lambda che tên trùng ở ngoài: giá trị lúc gọi ta không biết.
+
+        Vẫn phải còn lại rule "biểu thức không phải hằng" -- im lặng hoàn toàn
+        mới là hỏng.
+        """
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    run = lambda payload: eval(payload)\n"
+            "    return run('an toan')\n"
+        )
+        ids = rule_ids(source)
+        assert "FSB-EXEC-001" not in ids
+        assert "FSB-EXEC-002" in ids
+
+    def test_an_immediately_invoked_lambda(self):
+        """`(lambda: sink())()` -- cùng điểm mù, chỉ khác chỗ đặt dấu ngoặc.
+
+        _eval_call chỉ đọc `node.func` cho Call/Subscript/IfExp, nên một lambda
+        gọi ngay vẫn lọt qua kể cả sau khi _eval_lambda đã có.
+        """
+        source = (
+            "from flask import request\n"
+            "result = (lambda: eval(request.args.get('x')))()\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_lambda_returning_another_lambda(self):
+        source = (
+            "from flask import request\n"
+            "handler = lambda: (lambda: eval(request.args.get('x')))()\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_an_ordinary_lambda_stays_quiet(self):
+        source = "nums = [3, 1, 2]\nout = sorted(nums, key=lambda value: value * 2)\n"
+        assert rule_ids(source) == []
+
+
+class TestReportsCannotBeRewrittenByTheCodeTheyDescribe:
+    """Trích đoạn trong báo cáo là do người viết tệp được quét soạn ra."""
+
+    def test_snippet_cannot_break_out_of_the_markdown_code_fence(self):
+        """Hàng rào ba dấu ` cứng bị chính trích đoạn đóng lại giữa chừng.
+
+        Phần đuôi rơi ra ngoài thành Markdown thật, đủ để nhét HTML hay nguyên
+        một mục "Các phát hiện" giả vào bản báo cáo người ta đang đọc.
+        """
+        from fortress_scan.core.model import ScanResult
+        from fortress_scan.report import to_markdown
+
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    name = request.args.get('n')\n"
+            '    os.system("ping " + name + "```<img src=x onerror=alert(1)>```")\n'
+        )
+        result = ScanResult(root="/tmp", findings=scan_source(source, PYTHON, "app.py"))
+        lines = to_markdown(result, "test").split("\n")
+
+        fences = [index for index, text in enumerate(lines) if text == "````"]
+        assert len(fences) >= 2, "hàng rào không nới ra theo nội dung"
+        start, end = fences[0], fences[1]
+        body = lines[start + 1 : end]
+        assert any("<img" in text for text in body), "trích đoạn đi đâu mất"
+        assert not any(
+            text.strip() in ("```", "````") for text in body
+        ), "trích đoạn tự đóng khối mã, phần đuôi thành Markdown thật"
+
+    def test_a_link_cannot_be_smuggled_into_report_prose(self):
+        from fortress_scan.report.structured import _escape
+
+        escaped = _escape("[bam vao day](http://evil)")
+        assert escaped.startswith("\\["), "cú pháp liên kết đi thẳng vào báo cáo"
+        assert "\\]" in escaped
+
+
 class TestEvasionAttempts:
     def test_aliased_module_import(self):
         source = (
@@ -568,6 +694,156 @@ class TestEvasionAttempts:
             "    os.system(request.args.get('c'))\n"
         )
         assert "FSB-CMD-001" in rule_ids(source)
+
+    @pytest.mark.parametrize(
+        "name,source",
+        [
+            # `//` là phép chia nguyên của Python, không phải chú thích.
+            (
+                "app.py",
+                "import os\n"
+                "from flask import request\n"
+                'CHUNK = 1024 // 2 ; NOTE = "# fortress-scan: ignore-file"\n'
+                "def handler():\n"
+                "    os.system(request.args.get('c'))\n",
+            ),
+            # `--` là toán tử giảm, không phải chú thích, ở mọi ngôn ngữ ở đây.
+            (
+                "app.js",
+                "const cp = require('child_process');\n"
+                'let i = 5; i--; const NOTE = "// fortress-scan: ignore-file";\n'
+                "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            ),
+            # `#` là trường riêng tư của JavaScript, không phải chú thích.
+            (
+                "priv.js",
+                "const cp = require('child_process');\n"
+                'class A { #x = "// fortress-scan: ignore-file"; }\n'
+                "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            ),
+            # Chú thích khối ĐÓNG LẠI; sau `*/` là mã thật, và mã thật có chuỗi.
+            (
+                "block.js",
+                "const cp = require('child_process');\n"
+                '/* ghi chu */ const NOTE = "// fortress-scan: ignore-file";\n'
+                "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            ),
+            # `--` đứng trước một tham số dòng lệnh trong shell.
+            (
+                "deploy.sh",
+                "#!/bin/bash\n"
+                'rm -f -- "$1"; MSG="# fortress-scan: ignore-file"\n'
+                'eval "$USER_INPUT"\n',
+            ),
+            # Trong shell, `#` chỉ mở chú thích khi nó bắt đầu một từ; một
+            # fragment của URL thì không.
+            (
+                "fetch.sh",
+                "#!/bin/bash\n"
+                'curl http://example.com/#frag; MSG="# fortress-scan: ignore-file"\n'
+                'eval "$USER_INPUT"\n',
+            ),
+            # `a <!--b` là `a < !(--b)`: biểu thức hợp lệ, không phải chú thích.
+            (
+                "Legacy.java",
+                "public class Legacy {\n"
+                "  void f(String q) {\n"
+                "    int a = 1, b = 1;\n"
+                "    boolean c = a <!--b;\n"
+                '    String n = "// fortress-scan: ignore-file";\n'
+                "    java.sql.Statement s = null;\n"
+                "    s.executeQuery(\"SELECT * FROM t WHERE x='\" + q + \"'\");\n"
+                "  }\n"
+                "}\n",
+            ),
+        ],
+    )
+    def test_operator_that_looks_like_a_comment_marker_cannot_suppress(
+        self, tmp_path: Path, name: str, source: str
+    ):
+        """Một danh sách dấu chú thích dùng chung cho mọi ngôn ngữ là đường lách.
+
+        Bộ mặt nạ dừng ở dấu mở chú thích ĐẦU TIÊN và giữ nguyên phần đuôi dòng.
+        Nếu dấu đó không phải chú thích trong ngôn ngữ đang đọc -- `//` trong
+        Python, `--` hay `#` trong JavaScript -- thì hằng chuỗi nằm sau nó lọt
+        ra ngoài và được tính như chú thích thật, tắt sạch cả tệp. Đúng thứ mà
+        README hứa là không xảy ra, chỉ khác chỗ đặt dấu.
+        """
+        (tmp_path / name).write_text(source, encoding="utf-8")
+        result = scan(str(tmp_path), Config())
+
+        assert result.findings, "chuỗi giả dạng chú thích vẫn tắt được cả tệp"
+        assert result.suppressed == 0
+
+    def test_a_real_comment_still_suppresses_in_each_language(self, tmp_path: Path):
+        """Mặt kia của phép thử trên: chú thích thật phải vẫn còn tác dụng."""
+        (tmp_path / "app.py").write_text(
+            "import os\n"
+            "from flask import request\n"
+            "# fortress-scan: ignore-file\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "app.js").write_text(
+            "const cp = require('child_process');\n"
+            "/* fortress-scan: ignore-file */\n"
+            "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "deploy.sh").write_text(
+            "#!/bin/bash\n"
+            "if true; then\n"
+            "    # fortress-scan: ignore-file\n"
+            '    eval "$USER_INPUT"\n'
+            "fi\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+
+        assert not result.findings
+        assert result.suppressed == 3
+
+    def test_an_html_comment_directive_survives_the_marker_table(self):
+        """`<!--` bị gỡ khỏi bảng chú thích khối, nhưng chỉ thị phải vẫn chạy.
+
+        Bảng đó không phải thứ cho phép một chỉ thị hoạt động: _mask_line chép
+        nguyên văn mọi ký tự không nằm trong chuỗi, nên chỉ thị vẫn tới được bộ
+        dò. Bảng chỉ quyết định có phơi nguyên phần đuôi dòng ra hay không. Mất
+        phép thử này là mất luôn lý do vì sao gỡ `<!--` lại an toàn.
+        """
+        source = (
+            "const cp = require('child_process');\n"
+            "<!-- fortress-scan: ignore-file -->\n"
+            "function run(req) { cp.exec('ping ' + req.query.host); }\n"
+        )
+        assert scan_source(source, "javascript", "page.vue") == []
+
+    def test_sarif_says_when_a_directive_removed_a_finding(self, tmp_path: Path):
+        """SARIF là đường vào code scanning của CI, nên im lặng ở đây tốn nhất.
+
+        Console đã đếm số phát hiện bị chú thích che đi. SARIF thì từng xuất ra
+        `results: []` kèm `toolExecutionNotifications: []` -- không phân biệt
+        được với một lượt quét sạch thật sự.
+        """
+        (tmp_path / "app.py").write_text(
+            "import os\n"
+            "from flask import request\n"
+            "# fortress-scan: ignore-file\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        document = json.loads(to_sarif(result, "test"))
+        notifications = document["runs"][0]["invocations"][0][
+            "toolExecutionNotifications"
+        ]
+
+        assert result.suppressed == 1
+        assert any(
+            item["descriptor"]["id"] == "findings-suppressed" for item in notifications
+        )
 
     def test_project_config_hiding_is_announced_and_defeatable(self, tmp_path: Path):
         """Tệp cấu hình nằm trong cây bị quét là do người viết mã đó kiểm soát.
