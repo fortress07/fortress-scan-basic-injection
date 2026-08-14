@@ -496,3 +496,42 @@ class TestSanitizerNameShadowing:
             'function h(req) { cp.exec("ping " + encodeURIComponent(req.query.host)); }\n'
         )
         assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_requiring_the_real_library_is_not_shadowing(self):
+        """`const escapeHtml = require("escape-html")` là nạp thư viện THẬT.
+
+        Tính nó là chiếm tên thì bộ khử độc thật mất tác dụng, và công cụ báo
+        bừa đúng vào cách viết đúng nhất của Node. Cùng ranh giới mà dccc9b8 đã
+        vạch cho phía Python: `import` không ghi vào môi trường, phép gán thì có.
+        """
+        source = (
+            'const escapeHtml = require("escape-html");\n'
+            "function h(req, el) { el.innerHTML = escapeHtml(req.query.x); }\n"
+        )
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_dynamic_import_is_not_shadowing_either(self):
+        source = (
+            'const escapeHtml = await import("escape-html");\n'
+            "function h(req, el) { el.innerHTML = escapeHtml(req.query.x); }\n"
+        )
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_assigning_to_a_property_is_not_shadowing(self):
+        """`utils.escapeHtml = ...` đặt một thuộc tính, không cướp tên trần."""
+        source = (
+            "const utils = {};\n"
+            'utils.escapeHtml = require("escape-html");\n'
+            "function h(req, el) { el.innerHTML = escapeHtml(req.query.x); }\n"
+        )
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_a_no_op_assignment_is_still_shadowing(self):
+        """Mặt kia của hai phép thử trên: vế phải không phải phép nhập thì đúng
+        là chiếm tên, và phải bắt được."""
+        source = (
+            'const cp = require("child_process");\n'
+            "const escapeHtml = s => s;\n"
+            'function h(req) { cp.exec("ping " + escapeHtml(req.query.host)); }\n'
+        )
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)

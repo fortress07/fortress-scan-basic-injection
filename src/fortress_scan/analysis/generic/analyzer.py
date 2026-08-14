@@ -24,6 +24,11 @@ _EVERY_CATEGORY: FrozenSet[Category] = frozenset(Category)
 # định nghĩa một cái tên trùng với bộ khử độc trong bảng.
 _FUNCTION_KEYWORDS = frozenset({"function", "func", "def", "sub", "fn"})
 
+# `const escapeHtml = require("escape-html")` là nạp thư viện thật, không phải
+# chiếm tên. Trong JavaScript thì require/import mới là phép nhập, còn dấu `=`
+# chỉ là cú pháp -- nên phải nhìn vế phải mới phân biệt được hai chuyện.
+_IMPORT_CALLS = frozenset({"require", "import", "await"})
+
 
 @dataclass(frozen=True)
 class TaintMark:
@@ -84,6 +89,15 @@ class _Analysis:
         Bắt hai dạng: khai báo hàm (`function escapeHtml`, `func`, `def`...) và
         gán vào chính cái tên đó (`escapeHtml = s => s`), vì cả hai đều đủ để
         cướp lấy quyền miễn trừ của bảng.
+
+        Hai thứ KHÔNG phải là chiếm tên, và tính nhầm chúng thì bộ khử độc thật
+        mất tác dụng -- tức là báo bừa đúng vào cách viết đúng nhất:
+
+            const escapeHtml = require("escape-html");  // nạp thư viện THẬT
+            utils.escapeHtml = fn;                      // gán vào thuộc tính
+
+        Đây cũng là ranh giới mà dccc9b8 đã vạch cho phía Python: `import`
+        không ghi vào môi trường, còn phép gán thì có.
         """
         limit = len(tokens)
         for index, token in enumerate(tokens):
@@ -92,6 +106,10 @@ class _Analysis:
             if token.text not in self.spec.sanitizers:
                 continue
             previous = tokens[index - 1] if index else None
+            if previous is not None and previous.kind == OP:
+                if previous.text in self.spec.chain_separators:
+                    # `utils.escapeHtml` -- thuộc tính, không phải tên trần.
+                    continue
             if (
                 previous is not None
                 and previous.kind == IDENT
@@ -105,6 +123,13 @@ class _Analysis:
                 and following.kind == OP
                 and following.text in self.spec.assignment_operators
             ):
+                initializer = tokens[index + 2] if index + 2 < limit else None
+                if (
+                    initializer is not None
+                    and initializer.kind == IDENT
+                    and initializer.text in _IMPORT_CALLS
+                ):
+                    continue
                 self.declared.add(token.text)
 
     def _seed_annotations(self, tokens: Sequence[Token]) -> None:
