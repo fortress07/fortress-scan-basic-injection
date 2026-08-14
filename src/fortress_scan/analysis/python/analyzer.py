@@ -326,6 +326,21 @@ class Evaluator:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             for decorator in getattr(node, "decorator_list", []):
                 self._eval(decorator, env)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Giá trị mặc định chạy NGAY tại chỗ định nghĩa, trong scope
+                # đang đứng -- không phải lúc gọi hàm. Bỏ qua chúng thì
+                # `def f(cb=eval(request.args.get("v"))): ...` không sinh ra
+                # phát hiện nào, dù dòng đó nổ ngay khi module được import.
+                for _, default in _lambda_parameters(node.args):
+                    if default is not None:
+                        self._eval(default, env)
+                return env
+            # Thân class cũng chạy lúc định nghĩa, nên `class C: x = eval(...)`
+            # là một sink thật. Chạy trên BẢN SAO môi trường rồi bỏ đi: những
+            # tên gán trong thân class thành thuộc tính của class chứ không rơi
+            # vào scope bao ngoài, nên globals_env phải giữ nguyên. Method bên
+            # trong vẫn được phân tích riêng qua self.functions như trước.
+            self._execute_block(node.body, copy_environment(env))
             return env
         if isinstance(node, ast.Raise):
             for child in (node.exc, node.cause):

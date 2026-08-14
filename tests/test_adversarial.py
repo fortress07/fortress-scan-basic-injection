@@ -361,6 +361,86 @@ class TestSinkHiddenInsideALambda:
         assert rule_ids(source) == []
 
 
+class TestSinkHiddenWhereStatementsStillRun:
+    """Hai chỗ chạy ngay lúc import mà bộ phân tích chưa từng bước vào.
+
+    _execute chỉ đọc decorator của ClassDef và FunctionDef rồi trả về, nên thân
+    class và giá trị mặc định của tham số là điểm mù trọn vẹn -- dù cả hai đều
+    thực thi thật ở thời điểm định nghĩa, không phải lúc gọi.
+    """
+
+    def test_a_sink_in_a_class_body(self):
+        source = (
+            "from flask import request\n"
+            "class Config:\n"
+            "    value = eval(request.args.get('v'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_nested_class_body(self):
+        source = (
+            "from flask import request\n"
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        value = eval(request.args.get('v'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_parameter_default(self):
+        source = (
+            "from flask import request\n"
+            "def handler(callback=eval(request.args.get('v'))):\n"
+            "    return callback\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_keyword_only_default(self):
+        source = (
+            "from flask import request\n"
+            "def handler(*, callback=eval(request.args.get('v'))):\n"
+            "    return callback\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_method_default(self):
+        source = (
+            "from flask import request\n"
+            "class C:\n"
+            "    def m(self, callback=eval(request.args.get('v'))):\n"
+            "        return callback\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_class_body_does_not_leak_into_the_enclosing_scope(self):
+        """Tên gán trong thân class thành thuộc tính của class, không phải biến
+        của scope bao ngoài -- nên nó không được nhiễm hộ một tên trùng ở ngoài.
+        """
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "class C:\n"
+            "    value = request.args.get('v')\n"
+            "value = 'hằng an toàn'\n"
+            "os.system('echo ' + value)\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_ordinary_class_bodies_and_defaults_stay_quiet(self):
+        source = (
+            "from dataclasses import dataclass, field\n"
+            "class Plain:\n"
+            "    NAME = 'x'\n"
+            "    LIMIT = 10\n"
+            "@dataclass\n"
+            "class Data:\n"
+            "    a: int = 0\n"
+            "    b: list = field(default_factory=list)\n"
+            "def f(a=1, b='x', *, c=None, **kw):\n"
+            "    return a\n"
+        )
+        assert rule_ids(source) == []
+
+
 class TestReportsCannotBeRewrittenByTheCodeTheyDescribe:
     """Trích đoạn trong báo cáo là do người viết tệp được quét soạn ra."""
 
