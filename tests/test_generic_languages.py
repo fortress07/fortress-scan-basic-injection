@@ -350,3 +350,188 @@ function h(req, flag) {
 }
 """
         assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+
+class TestSanitizerCategoriesAreNotInterchangeable:
+    """Một bộ khử độc chỉ khử được đúng nhóm của nó.
+
+    Bảng khử độc từng là một tập tên phẳng, không nhóm, nên bất kỳ tên nào
+    trong đó cũng tắt được MỌI nhóm. Đó là cách viết sai phổ biến nhất ngoài
+    đời -- lập trình viên dùng nhầm bộ thoát -- và công cụ lại im lặng đúng
+    ngay ở chỗ nó cần lên tiếng nhất.
+    """
+
+    def test_html_escape_does_not_clear_a_shell_command(self):
+        # htmlspecialchars() không đụng tới ; | & $ hay dấu nháy ngược.
+        source = '<?php\nsystem("ls " . htmlspecialchars($_GET["d"]));\n'
+        assert "FSB-CMD-001" in rule_ids(source, PHP)
+
+    def test_html_escape_does_not_clear_sql(self):
+        source = (
+            '<?php\nmysqli_query($c, "SELECT * FROM u WHERE n=\'"'
+            ' . htmlspecialchars($_GET["n"]) . "\'");\n'
+        )
+        assert "FSB-SQL-001" in rule_ids(source, PHP)
+
+    def test_shell_quoting_does_not_clear_sql(self):
+        # escapeshellarg() bọc chuỗi trong nháy đơn -- trong một câu SQL thì
+        # chính dấu nháy đó là ký tự phá cú pháp.
+        source = (
+            '<?php\nmysqli_query($c, "SELECT * FROM u WHERE n=\'"'
+            ' . escapeshellarg($_GET["n"]) . "\'");\n'
+        )
+        assert "FSB-SQL-001" in rule_ids(source, PHP)
+
+    def test_basename_does_not_clear_a_shell_command(self):
+        # basename("a;id") vẫn trả về "a;id".
+        source = '<?php\nsystem("ls " . basename($_GET["d"]));\n'
+        assert "FSB-CMD-001" in rule_ids(source, PHP)
+
+    def test_uri_encoding_does_not_clear_sql(self):
+        # encodeURIComponent() không mã hoá dấu nháy đơn.
+        source = (
+            'function h(req, db) {\n'
+            '  db.query("SELECT * FROM u WHERE n=\'" + encodeURIComponent(req.query.n) + "\'");\n'
+            '}\n'
+        )
+        assert "FSB-SQL-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_html_escape_does_not_clear_a_java_command(self):
+        source = (
+            "class A {\n"
+            "  void f(javax.servlet.http.HttpServletRequest req) throws Exception {\n"
+            '    Runtime.getRuntime().exec("ping "'
+            ' + StringEscapeUtils.escapeHtml4(req.getParameter("h")));\n'
+            "  }\n"
+            "}\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source, JAVA)
+
+    def test_html_escape_does_not_clear_a_ruby_command(self):
+        source = 'def h\n  system("ping " + CGI.escapeHTML(params[:host]))\nend\n'
+        assert "FSB-CMD-001" in rule_ids(source, RUBY)
+
+    def test_html_encode_does_not_clear_csharp_sql(self):
+        source = (
+            "class A { void F() {\n"
+            '  db.ExecuteSqlRaw("SELECT * FROM u WHERE n=\'"'
+            ' + HttpUtility.HtmlEncode(Request.Query["n"]) + "\'");\n'
+            "} }\n"
+        )
+        assert "FSB-SQL-001" in rule_ids(source, CSHARP)
+
+    def test_the_category_survives_an_intermediate_variable(self):
+        source = (
+            '<?php\n$s = htmlspecialchars($_GET["d"]);\nsystem("ls " . $s);\n'
+        )
+        assert "FSB-CMD-001" in rule_ids(source, PHP)
+
+    def test_the_right_sanitizer_still_silences_its_own_category(self):
+        """Mặt kia: dùng đúng bộ khử độc thì phải im hẳn, kể cả rule mức trung
+        bình "giá trị không phải hằng"."""
+        assert rule_ids('<?php\nsystem("ls " . escapeshellarg($_GET["d"]));\n', PHP) == []
+        assert rule_ids('<?php\ninclude(basename($_GET["p"]));\n', PHP) == []
+        assert rule_ids('<?php\necho htmlspecialchars($_GET["n"]);\n', PHP) == []
+        assert rule_ids(
+            'function h(req, el) { el.innerHTML = DOMPurify.sanitize(req.query.x); }\n',
+            JAVASCRIPT,
+        ) == []
+        assert rule_ids('def h\n  system("ping " + Shellwords.escape(params[:host]))\nend\n', RUBY) == []
+
+    def test_numeric_coercion_still_clears_everything(self):
+        assert rule_ids('<?php\nsystem("ls " . intval($_GET["d"]));\n', PHP) == []
+        assert rule_ids(
+            'const cp = require("child_process");\n'
+            'function h(req) { cp.exec("ping " + parseInt(req.query.host)); }\n',
+            JAVASCRIPT,
+        ) == []
+
+
+class TestSanitizerNameShadowing:
+    """Bảng khử độc tra theo TÊN, mà cái tên thì tệp được quét tự đặt được.
+
+    Cùng lập luận đã áp cho phía Python: bỏ sót một cái tên bị che ở phía sink
+    chỉ tốn thêm một phát hiện, còn bỏ sót ở đây thì xoá mất một phát hiện thật.
+    """
+
+    def test_a_local_function_cannot_hand_out_a_sanitizer_clearance(self):
+        source = (
+            'const cp = require("child_process");\n'
+            "function escapeHtml(s) { return s; }\n"
+            'function h(req) { cp.exec("ping " + escapeHtml(req.query.host)); }\n'
+        )
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_a_rebound_name_cannot_either(self):
+        source = (
+            'const cp = require("child_process");\n'
+            "const encodeURIComponent = s => s;\n"
+            'function h(req) { cp.exec("ping " + encodeURIComponent(req.query.host)); }\n'
+        )
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_shadowing_survives_an_intermediate_variable(self):
+        source = (
+            'const cp = require("child_process");\n'
+            "function escapeHtml(s) { return s; }\n"
+            "function h(req) {\n"
+            "  const s = escapeHtml(req.query.host);\n"
+            '  cp.exec("ping " + s);\n'
+            "}\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)
+
+    def test_a_php_function_shadowing_escapeshellarg(self):
+        source = (
+            "<?php\n"
+            "function escapeshellarg($s) { return $s; }\n"
+            'system("ls " . escapeshellarg($_GET["d"]));\n'
+        )
+        assert "FSB-CMD-001" in rule_ids(source, PHP)
+
+    def test_an_untouched_sanitizer_keeps_working(self):
+        source = (
+            'const cp = require("child_process");\n'
+            "function otherHelper(s) { return s; }\n"
+            'function h(req) { cp.exec("ping " + encodeURIComponent(req.query.host)); }\n'
+        )
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_requiring_the_real_library_is_not_shadowing(self):
+        """`const escapeHtml = require("escape-html")` là nạp thư viện THẬT.
+
+        Tính nó là chiếm tên thì bộ khử độc thật mất tác dụng, và công cụ báo
+        bừa đúng vào cách viết đúng nhất của Node. Cùng ranh giới mà dccc9b8 đã
+        vạch cho phía Python: `import` không ghi vào môi trường, phép gán thì có.
+        """
+        source = (
+            'const escapeHtml = require("escape-html");\n'
+            "function h(req, el) { el.innerHTML = escapeHtml(req.query.x); }\n"
+        )
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_dynamic_import_is_not_shadowing_either(self):
+        source = (
+            'const escapeHtml = await import("escape-html");\n'
+            "function h(req, el) { el.innerHTML = escapeHtml(req.query.x); }\n"
+        )
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_assigning_to_a_property_is_not_shadowing(self):
+        """`utils.escapeHtml = ...` đặt một thuộc tính, không cướp tên trần."""
+        source = (
+            "const utils = {};\n"
+            'utils.escapeHtml = require("escape-html");\n'
+            "function h(req, el) { el.innerHTML = escapeHtml(req.query.x); }\n"
+        )
+        assert rule_ids(source, JAVASCRIPT) == []
+
+    def test_a_no_op_assignment_is_still_shadowing(self):
+        """Mặt kia của hai phép thử trên: vế phải không phải phép nhập thì đúng
+        là chiếm tên, và phải bắt được."""
+        source = (
+            'const cp = require("child_process");\n'
+            "const escapeHtml = s => s;\n"
+            'function h(req) { cp.exec("ping " + escapeHtml(req.query.host)); }\n'
+        )
+        assert "FSB-CMD-001" in rule_ids(source, JAVASCRIPT)

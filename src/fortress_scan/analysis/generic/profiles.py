@@ -28,7 +28,11 @@ class LanguageSpec:
     sources: Dict[str, str]
     sinks: Tuple[GenericSink, ...]
     assignment_sinks: Dict[str, Tuple[str, Category, str]] = field(default_factory=dict)
-    sanitizers: FrozenSet[str] = frozenset()
+    # Mỗi bộ khử độc kèm ĐÚNG những nhóm nó thật sự khử, giống hệt bảng
+    # SANITIZERS bên phân tích Python. Một tập tên phẳng, không nhóm, nói rằng
+    # htmlspecialchars() khử được cả command injection -- mà nó không đụng tới
+    # một ký tự đặc biệt nào của shell.
+    sanitizers: Dict[str, FrozenSet[Category]] = field(default_factory=dict)
     weak_sanitizers: FrozenSet[str] = frozenset()
     declaration_keywords: FrozenSet[str] = frozenset()
     chain_separators: Tuple[str, ...] = (".",)
@@ -40,6 +44,31 @@ class LanguageSpec:
     bare_call_names: FrozenSet[str] = frozenset()
     assignment_operators: Tuple[str, ...] = ("=", "+=", ".=")
 
+
+# Ép về số hoặc UUID thì không còn ký tự đặc biệt nào sống sót, ở bất kỳ nhóm
+# nào. Đây là nhóm duy nhất xứng đáng với "khử sạch mọi thứ".
+_ALL_CATEGORIES: FrozenSet[Category] = frozenset(Category)
+
+# Bộ thoát HTML chỉ đổi < > & " thành thực thể. Dấu ; | & $ ` của shell và dấu
+# nháy đơn của SQL đi qua nguyên vẹn.
+_HTML_ONLY: FrozenSet[Category] = frozenset({Category.MARKUP})
+
+# Bộ trích dẫn shell chỉ lo cho shell. escapeshellarg() bọc chuỗi trong nháy
+# đơn, đưa thẳng vào một câu SQL thì nháy đơn đó lại là ký tự phá cú pháp.
+_COMMAND_ONLY: FrozenSet[Category] = frozenset({Category.COMMAND})
+
+# basename() cắt phần thư mục, đúng cho file inclusion. basename("a;id") vẫn
+# trả về "a;id" -- không giúp gì cho một câu lệnh shell.
+_PATH_ONLY: FrozenSet[Category] = frozenset({Category.DYNAMIC_IMPORT})
+
+# encodeURIComponent() mã hoá < > ; | & $ ` nhưng KHÔNG mã hoá dấu nháy đơn:
+# nó nằm trong tập ký tự không dè dặt của RFC 3986. Nên nó chặn được XSS và
+# lệnh shell, còn SQL thì không.
+_URI_COMPONENT: FrozenSet[Category] = frozenset({Category.MARKUP, Category.COMMAND})
+
+# preg_quote() thoát ký tự đặc biệt của regex. Dấu nháy đơn và dấu chấm phẩy
+# không nằm trong danh sách đó, nên nó không khử được nhóm nào ở đây.
+_NOTHING: FrozenSet[Category] = frozenset()
 
 _JS_LEXER = LexerProfile(
     line_comments=("//",),
@@ -714,20 +743,18 @@ SPECS: Dict[str, LanguageSpec] = {
                 "dangerouslySetInnerHTML",
             ),
         },
-        sanitizers=frozenset(
-            {
-                "encodeURIComponent",
-                "encodeURI",
-                "parseInt",
-                "parseFloat",
-                "Number",
-                "DOMPurify.sanitize",
-                "sanitizeHtml",
-                "validator.escape",
-                "shellQuote.quote",
-                "escapeHtml",
-            }
-        ),
+        sanitizers={
+            "encodeURIComponent": _URI_COMPONENT,
+            "encodeURI": _URI_COMPONENT,
+            "parseInt": _ALL_CATEGORIES,
+            "parseFloat": _ALL_CATEGORIES,
+            "Number": _ALL_CATEGORIES,
+            "DOMPurify.sanitize": _HTML_ONLY,
+            "sanitizeHtml": _HTML_ONLY,
+            "validator.escape": _HTML_ONLY,
+            "shellQuote.quote": _COMMAND_ONLY,
+            "escapeHtml": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "let", "const"}),
     ),
     TYPESCRIPT: LanguageSpec(
@@ -744,18 +771,16 @@ SPECS: Dict[str, LanguageSpec] = {
                 "dangerouslySetInnerHTML",
             ),
         },
-        sanitizers=frozenset(
-            {
-                "encodeURIComponent",
-                "encodeURI",
-                "parseInt",
-                "parseFloat",
-                "Number",
-                "DOMPurify.sanitize",
-                "sanitizeHtml",
-                "escapeHtml",
-            }
-        ),
+        sanitizers={
+            "encodeURIComponent": _URI_COMPONENT,
+            "encodeURI": _URI_COMPONENT,
+            "parseInt": _ALL_CATEGORIES,
+            "parseFloat": _ALL_CATEGORIES,
+            "Number": _ALL_CATEGORIES,
+            "DOMPurify.sanitize": _HTML_ONLY,
+            "sanitizeHtml": _HTML_ONLY,
+            "escapeHtml": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "let", "const"}),
         annotation_separator=":",
     ),
@@ -764,21 +789,24 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_PHP_LEXER,
         sources=_PHP_SOURCES,
         sinks=_PHP_SINKS,
-        sanitizers=frozenset(
-            {
-                "escapeshellarg",
-                "escapeshellcmd",
-                "intval",
-                "floatval",
-                "htmlspecialchars",
-                "htmlentities",
-                "preg_quote",
-                "filter_var",
-                "basename",
-                "urlencode",
-                "rawurlencode",
-            }
-        ),
+        sanitizers={
+            "escapeshellarg": _COMMAND_ONLY,
+            "escapeshellcmd": _COMMAND_ONLY,
+            "intval": _ALL_CATEGORIES,
+            "floatval": _ALL_CATEGORIES,
+            "htmlspecialchars": _HTML_ONLY,
+            "htmlentities": _HTML_ONLY,
+            "preg_quote": _NOTHING,
+            # filter_var() khử tới đâu là do đối số bộ lọc quyết định, mà đối
+            # số đó ở đây chưa đọc được. Giữ nguyên mức cũ để không đổi hành vi
+            # ngoài phạm vi lỗ hổng đang vá.
+            "filter_var": _ALL_CATEGORIES,
+            "basename": _PATH_ONLY,
+            # urlencode/rawurlencode mã hoá cả dấu nháy đơn, khác
+            # encodeURIComponent của JavaScript.
+            "urlencode": _ALL_CATEGORIES,
+            "rawurlencode": _ALL_CATEGORIES,
+        },
         weak_sanitizers=frozenset(
             {"addslashes", "mysql_real_escape_string", "mysqli_real_escape_string", "quote"}
         ),
@@ -793,17 +821,15 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_JAVA_LEXER,
         sources=_JAVA_SOURCES,
         sinks=_JAVA_SINKS,
-        sanitizers=frozenset(
-            {
-                "Integer.parseInt",
-                "Long.parseLong",
-                "Double.parseDouble",
-                "UUID.fromString",
-                "Encode.forHtml",
-                "StringEscapeUtils.escapeHtml4",
-                "ESAPI.encoder",
-            }
-        ),
+        sanitizers={
+            "Integer.parseInt": _ALL_CATEGORIES,
+            "Long.parseLong": _ALL_CATEGORIES,
+            "Double.parseDouble": _ALL_CATEGORIES,
+            "UUID.fromString": _ALL_CATEGORIES,
+            "Encode.forHtml": _HTML_ONLY,
+            "StringEscapeUtils.escapeHtml4": _HTML_ONLY,
+            "ESAPI.encoder": _HTML_ONLY,
+        },
         annotation_sources=_JAVA_ANNOTATIONS,
     ),
     RUBY: LanguageSpec(
@@ -811,18 +837,16 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_RUBY_LEXER,
         sources=_RUBY_SOURCES,
         sinks=_RUBY_SINKS,
-        sanitizers=frozenset(
-            {
-                "Integer",
-                "Float",
-                "to_i",
-                "to_f",
-                "Shellwords.escape",
-                "Shellwords.shellescape",
-                "ERB::Util.html_escape",
-                "CGI.escapeHTML",
-            }
-        ),
+        sanitizers={
+            "Integer": _ALL_CATEGORIES,
+            "Float": _ALL_CATEGORIES,
+            "to_i": _ALL_CATEGORIES,
+            "to_f": _ALL_CATEGORIES,
+            "Shellwords.escape": _COMMAND_ONLY,
+            "Shellwords.shellescape": _COMMAND_ONLY,
+            "ERB::Util.html_escape": _HTML_ONLY,
+            "CGI.escapeHTML": _HTML_ONLY,
+        },
         backtick_command=True,
     ),
     GO: LanguageSpec(
@@ -830,16 +854,15 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_GO_LEXER,
         sources=_GO_SOURCES,
         sinks=_GO_SINKS,
-        sanitizers=frozenset(
-            {
-                "strconv.Atoi",
-                "strconv.ParseInt",
-                "strconv.ParseFloat",
-                "html.EscapeString",
-                "url.QueryEscape",
-                "template.HTMLEscapeString",
-            }
-        ),
+        sanitizers={
+            "strconv.Atoi": _ALL_CATEGORIES,
+            "strconv.ParseInt": _ALL_CATEGORIES,
+            "strconv.ParseFloat": _ALL_CATEGORIES,
+            "html.EscapeString": _HTML_ONLY,
+            # url.QueryEscape mã hoá cả dấu nháy đơn.
+            "url.QueryEscape": _ALL_CATEGORIES,
+            "template.HTMLEscapeString": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "const"}),
         assignment_operators=("=", ":=", "+="),
     ),
@@ -848,17 +871,15 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_CSHARP_LEXER,
         sources=_CSHARP_SOURCES,
         sinks=_CSHARP_SINKS,
-        sanitizers=frozenset(
-            {
-                "int.Parse",
-                "Int32.Parse",
-                "Int64.Parse",
-                "Convert.ToInt32",
-                "Guid.Parse",
-                "HttpUtility.HtmlEncode",
-                "AntiXss.HtmlEncode",
-            }
-        ),
+        sanitizers={
+            "int.Parse": _ALL_CATEGORIES,
+            "Int32.Parse": _ALL_CATEGORIES,
+            "Int64.Parse": _ALL_CATEGORIES,
+            "Convert.ToInt32": _ALL_CATEGORIES,
+            "Guid.Parse": _ALL_CATEGORIES,
+            "HttpUtility.HtmlEncode": _HTML_ONLY,
+            "AntiXss.HtmlEncode": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "string", "int", "object"}),
     ),
     SHELL: LanguageSpec(
@@ -866,7 +887,7 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_SHELL_LEXER,
         sources=_SHELL_SOURCES,
         sinks=_SHELL_SINKS,
-        sanitizers=frozenset({"printf"}),
+        sanitizers={"printf": _COMMAND_ONLY},
         backtick_command=True,
     ),
 }
