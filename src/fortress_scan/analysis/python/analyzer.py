@@ -254,7 +254,9 @@ class ModuleAnalysis:
             worker = Evaluator(self, info, REPORT_MODE, globals_env)
             worker.execute_function(synthetic=False)
 
-    def lookup_function(self, qualname: Optional[str]) -> Optional[FunctionInfo]:
+    def lookup_function(
+        self, qualname: Optional[str], *, bare_name_call: bool = False
+    ) -> Optional[FunctionInfo]:
         if not qualname:
             return None
         info = self.functions.get(qualname)
@@ -264,8 +266,12 @@ class ModuleAnalysis:
         candidates = self.functions_by_name.get(simple)
         if candidates and len(candidates) == 1:
             return candidates[0]
+        # Khớp tên trần qua chỉ mục dự án chỉ dành cho lời gọi `ten_ham(...)`
+        # không qua attribute: `cp.read(...)` là lời gọi phương thức trên một
+        # đối tượng vô danh, bắt nó về `def read(...)` của module khác là gán
+        # nhầm nguồn gốc - và cái giá là cắt oan cả chuỗi taint thật.
         if self.project is not None:
-            return self.project.lookup(qualname)
+            return self.project.lookup(qualname, allow_simple=bare_name_call)
         return None
 
 
@@ -840,7 +846,9 @@ class Evaluator:
             if socket_source is not None:
                 return self._tainted(node, socket_source)
 
-        local = self.module.lookup_function(effective)
+        local = self.module.lookup_function(
+            effective, bare_name_call=isinstance(node.func, ast.Name)
+        )
         if local is not None and local.node is not getattr(self.function, "node", None):
             return self._apply_summary(local, node, argument_values, keyword_values)
 

@@ -717,3 +717,41 @@ def handler():
 """
     ids = [finding.rule_id for finding in scan_source(source, PYTHON, "app.py", Config())]
     assert "FSB-CMD-001" in ids
+
+
+def test_quiet_does_not_swallow_machine_output_or_files(tmp_path: Path, capsys):
+    """--quiet im phần người đọc, không im sản phẩm anh em yêu cầu bằng cờ.
+
+    Trước 0.2.1, `-f json --quiet` in ra chuỗi rỗng ( CI gõ | jq là chết )
+    và `-o file --quiet` không ghi tệp nào dù vẫn báo exit như thường.
+    """
+    (tmp_path / "app.py").write_text(
+        "from flask import request\n"
+        "import os\n"
+        "def handler():\n"
+        "    os.system('ping ' + request.args.get('h'))\n",
+        encoding="utf-8",
+    )
+
+    code = cli.main([str(tmp_path), "-f", "json", "--quiet", "--no-config", "--exit-zero"])
+    captured = capsys.readouterr()
+    assert code == 0
+    payload = json.loads(captured.out)
+    assert payload["findings"]
+
+    target = tmp_path / "bao-cao.json"
+    cli.main([str(tmp_path), "-f", "json", "--quiet", "-o", str(target), "--exit-zero"])
+    capsys.readouterr()
+    assert target.is_file()
+    assert json.loads(target.read_text(encoding="utf-8"))["findings"]
+
+
+def test_console_format_with_output_file_writes_console_text(tmp_path: Path):
+    """`-f console -o file` từng lặng lẽ ghi markdown - người dùng xin gì
+    thì phải nhận đúng cái đó."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    target = tmp_path / "bao-cao.txt"
+    cli.main([str(tmp_path), "-f", "console", "-o", str(target), "--no-config", "--exit-zero"])
+    content = target.read_text(encoding="utf-8")
+    assert "đã phân tích" in content
+    assert not content.lstrip().startswith("#")

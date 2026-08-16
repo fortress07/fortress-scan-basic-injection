@@ -107,12 +107,23 @@ class ProjectIndex:
             for key in [key for key, items in table.items() if len(items) > 1]:
                 del table[key]
 
-    def lookup(self, qualname: Optional[str]) -> Optional[FunctionInfo]:
+    def lookup(
+        self, qualname: Optional[str], *, allow_simple: bool = True
+    ) -> Optional[FunctionInfo]:
+        """Tra hàm theo tên import; `allow_simple` bật tra thêm theo tên trần.
+
+        Đường dotted ( `helpers.run_cmd` ) là liên kết có căn cứ import nên
+        luôn được tra. Tên trần thì chỉ dành cho lời gọi `run_cmd(...)` không
+        qua attribute: áp nó cho `cp.read(...)` là gán nguồn gốc sai cho một
+        lời gọi phương thức trên đối tượng vô danh.
+        """
         if not qualname:
             return None
         exact = self._dotted.get(qualname)
         if exact:
             return exact[0]
+        if not allow_simple:
+            return None
         simple = qualname.rsplit(".", 1)[-1]
         candidates = self._simple.get(simple)
         if candidates:

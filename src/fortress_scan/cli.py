@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Set, Tuple
@@ -283,12 +284,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _stderr("fortress-scan: không ghi được baseline: %s" % exc)
             return EXIT_USAGE
 
-    if not args.quiet:
-        try:
-            _emit(result, args, output_path)
-        except OSError as exc:
-            _stderr("fortress-scan: không ghi được báo cáo: %s" % exc)
-            return EXIT_USAGE
+    # --quiet chỉ im lặng phần người đọc: tệp -o và định dạng máy (json/sarif/
+    # markdown ra stdout) là sản phẩm anh em yêu cầu bằng cờ, nên phải có mặt
+    # dù có --quiet - kẻo CI gõ `-f json --quiet | jq` lại nhận chuỗi rỗng.
+    try:
+        _emit(result, args, output_path)
+    except OSError as exc:
+        _stderr("fortress-scan: không ghi được báo cáo: %s" % exc)
+        return EXIT_USAGE
 
     if args.exit_zero:
         return EXIT_CLEAN
@@ -303,13 +306,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 def _emit(result: ScanResult, args: argparse.Namespace, output_path: Optional[Path]) -> None:
-    if args.format == "console" and output_path is None:
-        reporter = ConsoleReporter(
-            sys.stdout,
-            color=supports_color(sys.stdout) and not args.no_color,
-            verbose=args.verbose,
-        )
-        reporter.render(result)
+    if args.format == "console":
+        if output_path is None:
+            if args.quiet:
+                return
+            reporter = ConsoleReporter(
+                sys.stdout,
+                color=supports_color(sys.stdout) and not args.no_color,
+                verbose=args.verbose,
+            )
+            reporter.render(result)
+            return
+        # Trước đây nhánh này rơi vào markdown: người dùng xin console mà nhận
+        # về markdown thì không khác nào đổi sản phẩm sau lưng.
+        buffer = io.StringIO()
+        ConsoleReporter(buffer, color=False, verbose=args.verbose).render(result)
+        output_path.write_text(buffer.getvalue(), encoding="utf-8")
+        if not args.quiet:
+            _stderr("fortress-scan: đã ghi báo cáo vào %s" % output_path)
         return
 
     if args.format == "json":
@@ -323,7 +337,8 @@ def _emit(result: ScanResult, args: argparse.Namespace, output_path: Optional[Pa
         sys.stdout.write(payload)
         return
     output_path.write_text(payload, encoding="utf-8")
-    _stderr("fortress-scan: đã ghi báo cáo vào %s" % output_path)
+    if not args.quiet:
+        _stderr("fortress-scan: đã ghi báo cáo vào %s" % output_path)
 
 
 def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
