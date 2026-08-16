@@ -90,6 +90,54 @@ def test_sandbox_blocks_network_and_process_execution():
     assert socket.socket is not None
 
 
+def test_sandbox_blocks_every_process_primitive_on_this_platform():
+    """Họ exec*/spawn*/posix_spawn* phải chặn hết mọi biến thể tồn tại trên
+    nền tảng hiện tại, không chỉ vài cái phổ biến."""
+    import subprocess
+
+    sandbox.engage()
+    blocked = []
+    try:
+        for name in (
+            "system",
+            "popen",
+            "execv",
+            "execve",
+            "execvp",
+            "execvpe",
+            "execl",
+            "execle",
+            "execlp",
+            "spawnv",
+            "spawnve",
+            "spawnvp",
+            "spawnvpe",
+            "spawnl",
+            "spawnle",
+            "spawnlp",
+            "spawnlpe",
+            "posix_spawn",
+            "posix_spawnp",
+            "fork",
+            "forkpty",
+            "startfile",
+        ):
+            original = getattr(os, name, None)
+            if original is None:
+                continue
+            blocked.append(name)
+            with pytest.raises(sandbox.SandboxViolation):
+                getattr(os, name)()
+        if hasattr(subprocess, "Popen"):
+            blocked.append("Popen")
+            with pytest.raises(sandbox.SandboxViolation):
+                subprocess.Popen()
+    finally:
+        sandbox.release()
+    # Trên mỗi nền tảng đều phải chặn được ít nhất một primitive thật.
+    assert blocked
+
+
 def test_budget_stops_runaway_analysis():
     budget = Budget(units=10, seconds=5.0)
     with pytest.raises(BudgetExceeded):
@@ -439,12 +487,17 @@ def test_coverage_notice_cannot_smuggle_terminal_escapes(tmp_path: Path, capsys)
     assert "\x1b" not in captured.out and "\x07" not in captured.out
     assert "\\x1b" in captured.out
 
-    # Tên khóa cũng do tệp cấu hình đặt, và nó đi vào thông báo lỗi.
+    # Tên khóa cũng do tệp cấu hình đặt, và nó đi vào thông báo cảnh báo khi
+    # tệp cấu hình hỏng bị bỏ qua. Tệp cấu hình tự tìm thấy trong cây bị quét
+    # là dữ liệu không tin cậy: nó hỏng thì lượt quét vẫn phải chạy tiếp bằng
+    # cấu hình mặc định, chứ không chết cả lượt.
     (tmp_path / ".fortress-scan.json").write_text(
         json.dumps({"\x1b]0;PWNED\x07": 1}), encoding="utf-8"
     )
-    assert cli.main([str(tmp_path), "--no-color"]) == 2
-    assert "\x1b" not in capsys.readouterr().err
+    assert cli.main([str(tmp_path), "--no-color"]) == 0
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.err and "\x07" not in captured.err
+    assert "\\x1b" in captured.err  # vẫn hiện ra, chỉ là đã bị vô hiệu hóa
 
 
 def test_file_swapped_after_discovery_is_not_analysed(tmp_path: Path):
