@@ -1,10 +1,11 @@
 import os
 import pickle
-import subprocess
 import sqlite3
+import subprocess
 
+import requests
 import yaml
-from flask import Flask, request
+from flask import Flask, redirect, request, send_file
 from jinja2 import Template
 
 app = Flask(__name__)
@@ -29,6 +30,14 @@ def lookup():
     cursor = connection.cursor()
     cursor.execute(f"SELECT * FROM users WHERE name = '{name}'")
     return str(cursor.fetchall())
+
+
+@app.route("/user")
+def user():
+    from db_helper import find_user
+
+    connection = sqlite3.connect("app.db")
+    return str(find_user(connection.cursor(), request.args.get("name")))
 
 
 @app.route("/render")
@@ -62,3 +71,25 @@ def plugin():
 @app.route("/attribute")
 def attribute():
     return str(getattr(app, request.args.get("field")))
+
+
+@app.route("/download")
+def download():
+    return send_file("/var/data/" + request.args.get("file"))
+
+
+@app.route("/fetch")
+def fetch():
+    return requests.get(request.args.get("url")).text
+
+
+@app.route("/go")
+def go():
+    return redirect(request.args.get("next"))
+
+
+@app.route("/trace")
+def trace():
+    response = app.make_response("ok")
+    response.headers["X-Trace-Id"] = request.args.get("trace")
+    return response

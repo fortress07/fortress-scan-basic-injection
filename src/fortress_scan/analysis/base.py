@@ -52,6 +52,7 @@ class FindingBuilder:
         column: int,
         label: str,
         code: str = "",
+        path: str = "",
     ) -> TraceStep:
         return TraceStep(
             kind=kind,
@@ -59,6 +60,7 @@ class FindingBuilder:
             column=column,
             label=make_snippet(label, 160),
             code=make_snippet(redact(code), 160) if code else self.snippet_for(line),
+            path=path,
         )
 
     def add(

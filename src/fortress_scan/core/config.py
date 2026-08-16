@@ -81,6 +81,7 @@ class Config:
     respect_ignore_files: bool = True
     respect_vcs_ignore: bool = True
     include_low_signal_sources: bool = False
+    cross_file_analysis: bool = True
     jobs: int = 1
 
     def with_overrides(self, **overrides: Any) -> "Config":
@@ -114,6 +115,7 @@ _ALLOWED_KEYS = frozenset(
         "respect_ignore_files",
         "respect_vcs_ignore",
         "include_low_signal_sources",
+        "cross_file_analysis",
         "jobs",
     )
 )
@@ -136,6 +138,7 @@ _BOOL_KEYS = frozenset(
         "respect_ignore_files",
         "respect_vcs_ignore",
         "include_low_signal_sources",
+        "cross_file_analysis",
     )
 )
 
@@ -168,6 +171,7 @@ _COVERAGE_KEYS: Tuple[Tuple[str, str], ...] = (
     ("max_total_bytes", "giới hạn tổng dung lượng"),
     ("node_budget", "giới hạn ngân sách phân tích"),
     ("token_budget", "giới hạn ngân sách phân tích"),
+    ("cross_file_analysis", "tắt phân tích xuyên file"),
 )
 
 

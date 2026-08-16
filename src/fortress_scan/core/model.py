@@ -91,15 +91,21 @@ class TraceStep:
     column: int
     label: str
     code: str = ""
+    # Bước nằm ở tệp khác với tệp của phát hiện ( đường đi xuyên file );
+    # rỗng nghĩa là cùng tệp.
+    path: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "kind": self.kind.value,
             "line": self.line,
             "column": self.column,
             "label": self.label,
             "code": self.code,
         }
+        if self.path:
+            result["path"] = self.path
+        return result
 
 
 _WHITESPACE = re.compile(r"\s+")

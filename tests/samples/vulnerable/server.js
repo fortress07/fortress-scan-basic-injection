@@ -36,3 +36,17 @@ function renderProfile(container, req) {
 }
 
 module.exports = { app, renderProfile };
+
+app.get("/proxy", (req, res) => {
+  const target = req.query.url;
+  fetch(target).then((r) => r.text()).then((body) => res.send(body));
+});
+
+app.get("/go", (req, res) => {
+  res.redirect(req.query.next);
+});
+
+app.get("/read", (req, res) => {
+  const fs = require("fs");
+  fs.readFile(req.query.file, "utf8", (error, data) => res.send(data));
+});

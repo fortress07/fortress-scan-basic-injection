@@ -167,12 +167,15 @@ def _code_flows(finding: Finding) -> List[Dict[str, Any]]:
         return []
     locations = []
     for step in finding.trace:
+        # Bước xuyên file mang tệp của riêng nó; bước thường thì thuộc về tệp
+        # của phát hiện.
+        step_uri = display_path(step.path) if step.path else display_path(finding.path)
         locations.append(
             {
                 "location": {
                     "physicalLocation": {
                         "artifactLocation": {
-                            "uri": display_path(finding.path),
+                            "uri": step_uri,
                             "uriBaseId": "%SRCROOT%",
                         },
                         "region": {
@@ -292,9 +295,12 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
             lines.append("Đường đi của dữ liệu:")
             lines.append("")
             for step in finding.trace:
+                where = "dòng %d" % step.line
+                if step.path:
+                    where += " trong %s" % _inline_code(_escape(display_path(step.path)))
                 lines.append(
-                    "1. dòng %d - %s (%s)"
-                    % (step.line, _escape(step.label), _inline_code(neutralize(step.code)))
+                    "1. %s - %s (%s)"
+                    % (where, _escape(step.label), _inline_code(neutralize(step.code)))
                 )
             lines.append("")
         lines.append("**Cách khắc phục.** %s" % _escape(rule.remediation))

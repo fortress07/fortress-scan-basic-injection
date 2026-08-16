@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from ...core.budget import Budget, BudgetExceeded
+from ...core.config import Config
 from ...core.model import Category, Confidence, Finding, StepKind
 from ...languages import PYTHON
 from ..base import Analyzer, AnalysisUnit, FindingBuilder
@@ -29,6 +30,9 @@ from .taint import (
     ordered_callables,
     union_callables,
 )
+
+if TYPE_CHECKING:  # tránh vòng import: project.py nhập FunctionInfo từ đây
+    from .project import ProjectIndex
 
 SUMMARY_MODE = "summary"
 REPORT_MODE = "report"
@@ -79,27 +83,68 @@ class FunctionInfo:
     simple_name: str
     parameters: Tuple[str, ...]
     handler_sources: Dict[str, specs.SourceSpec] = field(default_factory=dict)
+    # Hàm của tệp khác mang sẵn summary và nguồn gốc của nó; hàm cục bộ thì
+    # hai trường này trống và summary được tra ở module.summaries như trước.
+    summary: Optional["Summary"] = None
+    origin_path: str = ""
 
 
 class PythonAnalyzer(Analyzer):
     name = "python-taint"
     languages = (PYTHON,)
 
-    def analyze(self, unit: AnalysisUnit, budget: Budget) -> List[Finding]:
+    def analyze(
+        self,
+        unit: AnalysisUnit,
+        budget: Budget,
+        project: Optional["ProjectIndex"] = None,
+    ) -> List[Finding]:
         try:
             tree = ast.parse(unit.source, filename=unit.relative_path)
         except (SyntaxError, ValueError, MemoryError, RecursionError) as exc:
             raise UnparsableSource(str(exc)) from exc
-        module = ModuleAnalysis(unit, budget)
+        module = ModuleAnalysis(unit, budget, project)
         return module.run(tree)
+
+    def collect_module(
+        self,
+        source: str,
+        relative_path: str,
+        budget: Budget,
+        project: Optional["ProjectIndex"] = None,
+    ) -> Optional[Tuple[Dict[str, FunctionInfo], Dict[str, Summary]]]:
+        """Chỉ chạy pha thu thập: hàm và summary, không báo cáo gì.
+
+        Trả về None nếu mã không parse được -- pha báo cáo sẽ tự ghi lỗi
+        parse cho tệp này, pha thu thập không cần nói lại.
+        """
+        try:
+            tree = ast.parse(source, filename=relative_path)
+        except (SyntaxError, ValueError, MemoryError, RecursionError):
+            return None
+        unit = AnalysisUnit(
+            relative_path=relative_path,
+            language=PYTHON,
+            source=source,
+            config=Config(),
+        )
+        module = ModuleAnalysis(unit, budget, project)
+        module.collect(tree)
+        return module.functions, module.summaries
 
 
 class ModuleAnalysis:
-    def __init__(self, unit: AnalysisUnit, budget: Budget) -> None:
+    def __init__(
+        self,
+        unit: AnalysisUnit,
+        budget: Budget,
+        project: Optional["ProjectIndex"] = None,
+    ) -> None:
         self.unit = unit
         self.budget = budget
         self.builder = FindingBuilder(unit)
         self.imports = ImportResolver()
+        self.project = project
         self.functions: Dict[str, FunctionInfo] = {}
         self.functions_by_name: Dict[str, List[FunctionInfo]] = {}
         self.summaries: Dict[str, Summary] = {}
@@ -133,17 +178,32 @@ class ModuleAnalysis:
         return cached
 
     def run(self, tree: ast.Module) -> List[Finding]:
-        self.imports.collect(tree)
-        self._collect_functions(tree)
+        globals_env = self.collect(tree)
         try:
-            globals_env = self._collect_globals(tree)
-            self._compute_summaries(globals_env)
             self._report(tree, globals_env)
         except BudgetExceeded:
             pass
         except RecursionError:
             pass
         return self.builder.findings
+
+    def collect(self, tree: ast.Module) -> Environment:
+        """Pha thu thập: imports, hàm, biến toàn cục và summary từng hàm.
+
+        Engine gọi riêng pha này cho mọi tệp Python để dựng chỉ mục xuyên
+        file, rồi gọi pha báo cáo với chỉ mục đó trong tay.
+        """
+        self.imports.collect(tree)
+        self._collect_functions(tree)
+        globals_env: Environment = {}
+        try:
+            globals_env = self._collect_globals(tree)
+            self._compute_summaries(globals_env)
+        except BudgetExceeded:
+            pass
+        except RecursionError:
+            pass
+        return globals_env
 
     def _collect_functions(self, tree: ast.Module) -> None:
         stack: List[Tuple[ast.AST, str]] = [(tree, "")]
@@ -204,6 +264,8 @@ class ModuleAnalysis:
         candidates = self.functions_by_name.get(simple)
         if candidates and len(candidates) == 1:
             return candidates[0]
+        if self.project is not None:
+            return self.project.lookup(qualname)
         return None
 
 
@@ -876,7 +938,10 @@ class Evaluator:
         argument_values: Sequence[Value],
         keyword_values: Dict[str, Value],
     ) -> Value:
-        summary = self.module.summaries.get(callee.qualname, Summary())
+        if callee.summary is not None:
+            summary = callee.summary
+        else:
+            summary = self.module.summaries.get(callee.qualname, Summary())
         bindings = _bind_arguments(callee.parameters, argument_values, keyword_values)
         result_taint: Optional[Taint] = None
         sanitized = False
@@ -940,6 +1005,29 @@ class Evaluator:
                 )
             return
         if taint.parameters:
+            return
+        if callee.origin_path:
+            # Sink nằm ở tệp khác: vị trí phát hiện là lời gọi ( cùng tệp với
+            # đường đi đã biết ), còn bước sink trong đường đi chỉ rõ tệp và
+            # dòng thật của nó để anh em nhảy thẳng tới chỗ cần sửa.
+            sink_step = self.builder.step(
+                StepKind.SINK,
+                hit.line,
+                hit.column,
+                "chạy tới %s" % hit.description,
+                path=callee.origin_path,
+            )
+            self.builder.add(
+                rule_id=hit.rule_id,
+                line=node.lineno,
+                column=node.col_offset,
+                symbol=hit.symbol,
+                message="%s đi qua %s() trong %s rồi vào %s"
+                % (taint.describe(), callee.simple_name, callee.origin_path, hit.description),
+                confidence=_confidence_for(taint),
+                trace=tuple(taint.trace) + (call_step, sink_step),
+                tags=("interprocedural", "cross-file"),
+            )
             return
         sink_step = self.builder.step(
             StepKind.SINK, hit.line, hit.column, "chạy tới %s" % hit.description
@@ -1424,6 +1512,20 @@ def _reflected_callables(node: ast.Call, imports: ImportResolver) -> FrozenSet[C
     )
 
 
+_EXIT_CALLS = frozenset(
+    {
+        "abort",
+        "sys.exit",
+        "os._exit",
+        "os.abort",
+        "exit",
+        "quit",
+        "posix_spawn",
+        "flask.abort",
+    }
+)
+
+
 def _terminates(statements: Sequence[ast.stmt]) -> bool:
     if not statements:
         return False
@@ -1434,6 +1536,18 @@ def _terminates(statements: Sequence[ast.stmt]) -> bool:
         return _terminates(last.body) and _terminates(last.orelse)
     if isinstance(last, ast.With):
         return _terminates(last.body)
+    # flask.abort() và sys.exit() là lối thoát chuẩn của mẫu
+    # "kiểm tra rồi dừng": không tính chúng là kết thúc luồng thì guard
+    # `if not hop_le: abort(400)` không bao giờ vô hiệu được taint.
+    if isinstance(last, ast.Expr) and isinstance(last.value, ast.Call):
+        callee = last.value.func
+        name = (
+            callee.id
+            if isinstance(callee, ast.Name)
+            else (dotted_name(callee) if isinstance(callee, ast.Attribute) else None)
+        )
+        if name is not None and name in _EXIT_CALLS:
+            return True
     return False
 
 

@@ -83,10 +83,13 @@ class ConsoleReporter:
         if self._verbose and finding.trace:
             self._write("        %s" % self._paint("đường đi của dữ liệu:", "dim"))
             for step in finding.trace:
+                location = "dòng %d" % step.line
+                if step.path:
+                    location = "%s của %s" % (location, display_path(step.path))
                 self._write(
                     "          %s %s"
                     % (
-                        self._paint("dòng %d" % step.line, "dim"),
+                        self._paint(location, "dim"),
                         neutralize(step.label),
                     )
                 )
