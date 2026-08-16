@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from ...core.budget import Budget, BudgetExceeded
 from ...core.model import Category, Confidence, Finding, StepKind
 from ...core.registry import get_rule
 from ..base import Analyzer, AnalysisUnit, FindingBuilder
-from ..python.specs import SQL_STATEMENT
+from ..python.specs import looks_like_sql
 from .lexer import IDENT, NEWLINE, OP, STRING, Token, tokenize
 from .profiles import GenericSink, LanguageSpec, spec_for
 
@@ -221,7 +221,7 @@ class _Analysis:
         if sink is None:
             return
         if sink.require_sql:
-            selected = _select_sql_argument(arguments, sink, chain)
+            selected = _select_sql_argument(arguments, sink, chain, self.budget.spend)
         elif sink.program_position:
             wrapped = _shell_wrapper_argument(arguments)
             if wrapped is not None:
@@ -678,11 +678,14 @@ _ALWAYS_SQL = frozenset(
 
 
 def _select_sql_argument(
-    arguments: Sequence[Sequence[Token]], sink: GenericSink, chain: str
+    arguments: Sequence[Sequence[Token]],
+    sink: GenericSink,
+    chain: str,
+    spend: Optional[Callable[[int], None]] = None,
 ) -> Sequence[Token]:
     for argument in arguments:
         text = " ".join(token.text for token in argument if token.kind == STRING)
-        if SQL_STATEMENT.search(text):
+        if looks_like_sql(text, spend):
             return argument
     tail = chain.rsplit(".", 1)[-1]
     if chain in _ALWAYS_SQL or tail in _ALWAYS_SQL:

@@ -388,6 +388,29 @@ def read_source(
         return raw.decode("utf-8", errors="replace"), True
 
 
+# Các codec biến đổi byte-đối-byte: CPython chịu nhận chúng làm bảng mã nguồn
+# nhưng chúng là vector bomb giải nén - một tệp 2 MB khai báo zlib_codec có
+# thể giải nén thành hàng GB bên trong raw.decode(), ngoài mọi hạn mức của
+# engine. Mã thật gần như không bao giờ khai báo chúng; bỏ qua khai báo và
+# đọc theo UTF-8 như đối với bảng mã không tồn tại.
+_BOMB_CODECS = frozenset(
+    {
+        "zlib-codec",
+        "zlib",
+        "bz2-codec",
+        "bz2",
+        "base64-codec",
+        "base64",
+        "quopri-codec",
+        "quopri",
+        "hex-codec",
+        "hex",
+        "uu-codec",
+        "uu",
+    }
+)
+
+
 def _decode_python(raw: bytes) -> Tuple[str, bool]:
     """Giải mã đúng như CPython sẽ làm khi chạy tệp này.
 
@@ -398,7 +421,7 @@ def _decode_python(raw: bytes) -> Tuple[str, bool]:
     lọt vào AST.
     """
     encoding = declared_python_encoding(raw)
-    if encoding is not None:
+    if encoding is not None and encoding.lower().replace("_", "-") not in _BOMB_CODECS:
         try:
             return raw.decode(encoding), False
         except (LookupError, ValueError):  # ValueError bao cả UnicodeDecodeError
