@@ -173,6 +173,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="coi biến môi trường và tham số dòng lệnh là dữ liệu không tin cậy",
     )
+    behaviour.add_argument(
+        "--no-cross-file",
+        action="store_true",
+        help="không theo dõi dữ liệu Python chảy qua ranh giới tệp (mỗi tệp tự quét)",
+    )
 
     information = parser.add_argument_group("thông tin")
     information.add_argument(
@@ -404,6 +409,8 @@ def _resolve_config(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
         overrides["respect_vcs_ignore"] = False
     if args.include_env_sources:
         overrides["include_low_signal_sources"] = True
+    if args.no_cross_file:
+        overrides["cross_file_analysis"] = False
     return config.with_overrides(**overrides), notices
 
 

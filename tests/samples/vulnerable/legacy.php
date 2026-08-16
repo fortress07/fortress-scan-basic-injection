@@ -22,3 +22,12 @@ system("/usr/local/bin/greet " . $safe);
 
 $clean = intval($_GET["limit"]);
 mysqli_query($connection, "SELECT * FROM products LIMIT " . $clean);
+
+$trace = $_GET["trace"];
+header("X-Trace-Id: " . $trace);
+
+$document = $_GET["doc"];
+readfile("/var/www/uploads/" . $document);
+
+$remote = $_GET["feed"];
+echo file_get_contents($remote);

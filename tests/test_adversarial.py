@@ -1392,7 +1392,11 @@ class TestSanitizerNameShadowing:
 
 
 class TestDocumentedGaps:
-    def test_gap_taint_across_files_is_not_tracked(self, tmp_path: Path):
+    def test_cross_file_taint_is_now_tracked(self, tmp_path: Path):
+        """Từ 0.2 khoảng trống này đã lấp: dữ liệu bẩn qua ranh giới tệp
+        được theo dõi ( tests/test_cross_file.py ). Giữ chỗ này để ghi nhớ
+        ranh giới mới: chỉ Python; các ngôn ngữ quét theo token vẫn dừng ở
+        ranh giới tệp."""
         (tmp_path / "helpers.py").write_text(
             "import os\ndef run(value):\n    os.system(value)\n", encoding="utf-8"
         )
@@ -1402,8 +1406,7 @@ class TestDocumentedGaps:
             encoding="utf-8",
         )
         result = scan(str(tmp_path), Config())
-        assert not any(f.rule_id == "FSB-CMD-001" for f in result.findings)
-        assert any(f.rule_id == "FSB-CMD-003" for f in result.findings)
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
 
     def test_gap_taint_stored_on_an_instance_attribute(self):
         source = (

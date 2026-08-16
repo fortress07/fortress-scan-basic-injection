@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Sequence, Set, Tuple
+from typing import Callable, List, Optional, Sequence, Set, Tuple, TypeVar
 
 from ..analysis.base import AnalysisUnit
 from ..analysis.generic.analyzer import GenericAnalyzer
 from ..analysis.manifest import ManifestAnalyzer
 from ..analysis.python.analyzer import PythonAnalyzer, UnparsableSource
+from ..analysis.python.project import MAX_INDEX_FUNCTIONS, ProjectIndex
 from ..analysis.unicode_scan import UnicodeAnalyzer
 from ..languages import MANIFEST, PYTHON
 from ..security import paths as safe_paths
@@ -24,6 +25,12 @@ _UNICODE_ANALYZER = UnicodeAnalyzer()
 _MANIFEST_ANALYZER = ManifestAnalyzer()
 
 _MAX_FINDINGS = 20_000
+
+# Phân tích xuyên file giữ hai vòng thu thập trong RAM nên phải có chặn trên
+# riêng; vượt mức thì tắt hẳn và nói rõ thay vì im lặng quét nông.
+_MAX_CROSS_FILE_FILES = 2000
+
+_T = TypeVar("_T")
 
 
 def scan(
@@ -46,7 +53,8 @@ def scan(
     findings: List[Finding] = []
     suppressed = 0
 
-    outcomes = _run(discovered, settings)
+    outcomes, phase_notices = _run(discovered, settings)
+    coverage_notices.extend(phase_notices)
     for outcome in outcomes:
         if outcome.error is not None:
             errors.append(outcome.error)
@@ -150,15 +158,106 @@ class _Outcome:
         self.suppressed = 0
 
 
-def _run(discovered: Sequence[DiscoveredFile], config: Config) -> List[_Outcome]:
+def _run(
+    discovered: Sequence[DiscoveredFile], config: Config
+) -> Tuple[List[_Outcome], List[ScanNotice]]:
+    """Phân tích mọi tệp, dựng trước chỉ mục xuyên file cho phần Python.
+
+    Pha thu thập chạy hai vòng: vòng một tính summary từng tệp độc lập, vòng
+    hai tính lại với chỉ mục vòng một trong tay để hàm trung gian ghi nhận
+    được cả sink nằm ở tệp thứ ba. Sau đó mọi tệp mới vào pha báo cáo.
+    """
+    notices: List[ScanNotice] = []
+    python_files = [item for item in discovered if item.language == PYTHON]
+    project: Optional[ProjectIndex] = None
+    if python_files and config.cross_file_analysis:
+        if len(python_files) > _MAX_CROSS_FILE_FILES:
+            notices.append(
+                ScanNotice(
+                    kind="cross-file-analysis-skipped",
+                    summary=(
+                        "dự án có %d tệp Python nên vượt chặn trên %d; lượt quét "
+                        "này không theo dõi dữ liệu xuyên file"
+                        % (len(python_files), _MAX_CROSS_FILE_FILES)
+                    ),
+                    details=(
+                        "chạy lại với --jobs thấp hơn hoặc tách quét từng thư mục "
+                        "con nếu cần đường đi xuyên file",
+                    ),
+                )
+            )
+        else:
+            project = _build_project(python_files, config)
+            if project.full:
+                notices.append(
+                    ScanNotice(
+                        kind="cross-file-analysis-reduced",
+                        summary=(
+                            "dự án có nhiều hơn %d hàm nên chỉ mục xuyên file bị "
+                            "cắt bớt; một phần đường đi xuyên file có thể thiếu"
+                            % MAX_INDEX_FUNCTIONS
+                        ),
+                        details=("giới hạn bảo vệ bộ nhớ của chính lượt quét",),
+                    )
+                )
+    outcomes = _map_files(
+        discovered, config, lambda item: _analyze_file(item, config, project)
+    )
+    return outcomes, notices
+
+
+def _build_project(files: Sequence[DiscoveredFile], config: Config) -> ProjectIndex:
+    first = ProjectIndex()
+    _collect_into(first, files, config, None)
+    second = ProjectIndex()
+    _collect_into(second, files, config, first)
+    return second
+
+
+def _collect_into(
+    index: ProjectIndex,
+    files: Sequence[DiscoveredFile],
+    config: Config,
+    project: Optional[ProjectIndex],
+) -> None:
+    collected = _map_files(files, config, lambda item: _collect_one(item, config, project))
+    for item in collected:
+        if item is not None:
+            index.register(*item)
+
+
+def _collect_one(
+    discovered: DiscoveredFile,
+    config: Config,
+    project: Optional[ProjectIndex],
+):
+    try:
+        source, _ = read_source(discovered.path, discovered.language, discovered.identity)
+    except (FileChangedDuringScan, OSError, MemoryError):
+        return None
+    budget = Budget(config.node_budget, config.file_timeout_seconds)
+    collected = _PYTHON_ANALYZER.collect_module(
+        source, discovered.relative, budget, project
+    )
+    if collected is None:
+        return None
+    functions, summaries = collected
+    return discovered.relative, functions, summaries
+
+
+def _map_files(
+    discovered: Sequence[DiscoveredFile], config: Config, worker: Callable[[DiscoveredFile], _T]
+) -> List[_T]:
     if config.jobs <= 1 or len(discovered) < 4:
-        return [_analyze_file(item, config) for item in discovered]
+        return [worker(item) for item in discovered]
     workers = min(config.jobs, 32, len(discovered))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(lambda item: _analyze_file(item, config), discovered))
+        return list(pool.map(worker, discovered))
 
 
-def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
+def _analyze_file(
+    discovered: DiscoveredFile, config: Config, project: Optional[ProjectIndex] = None
+) -> _Outcome:
     outcome = _Outcome()
     outcome.language = discovered.language
     outcome.size = discovered.size
@@ -192,7 +291,7 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
         degraded_encoding=degraded,
     )
     try:
-        findings, failure = _analyze_unit(unit, config)
+        findings, failure = _analyze_unit(unit, config, project)
     except RecursionError:
         outcome.error = ScanError(
             path=discovered.relative, reason="nesting-too-deep", detail="chạm giới hạn đệ quy"
@@ -222,7 +321,7 @@ def _analyze_file(discovered: DiscoveredFile, config: Config) -> _Outcome:
 
 
 def _analyze_unit(
-    unit: AnalysisUnit, config: Config
+    unit: AnalysisUnit, config: Config, project: Optional[ProjectIndex] = None
 ) -> Tuple[List[Finding], Optional[Tuple[str, str]]]:
     findings: List[Finding] = []
     failure: Optional[Tuple[str, str]] = None
@@ -244,7 +343,10 @@ def _analyze_unit(
         analyzer = _GENERIC_ANALYZER
 
     try:
-        findings.extend(analyzer.analyze(unit, budget))
+        if unit.language == PYTHON:
+            findings.extend(analyzer.analyze(unit, budget, project))
+        else:
+            findings.extend(analyzer.analyze(unit, budget))
     except UnparsableSource as exc:
         failure = ("parse-error", str(exc))
     except BudgetExceeded as exc:

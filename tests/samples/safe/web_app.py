@@ -1,15 +1,21 @@
 import ast
 import html
+import os
+import re
 import shlex
 import sqlite3
 import subprocess
+from urllib.parse import urlparse
 
+import requests
 import yaml
-from flask import Flask, render_template, request
+from flask import Flask, abort, redirect, render_template, request, send_file
 
 app = Flask(__name__)
 
 ALLOWED_UNITS = {"nginx", "postgres", "redis"}
+ALLOWED_HOSTS = {"api.example.com", "cdn.example.com"}
+ALLOWED_PATHS = {"/home", "/profile"}
 
 
 @app.route("/ping")
@@ -41,6 +47,14 @@ def lookup():
     return str(cursor.fetchall())
 
 
+@app.route("/user")
+def user():
+    from safe_query import find_user
+
+    connection = sqlite3.connect("app.db")
+    return str(find_user(connection.cursor(), request.args.get("name")))
+
+
 @app.route("/page")
 def page():
     title = request.args.get("title")
@@ -67,3 +81,35 @@ def parse_config():
 def escape():
     comment = request.args.get("comment")
     return html.escape(comment)
+
+
+@app.route("/download")
+def download():
+    filename = os.path.basename(request.args.get("file", ""))
+    return send_file(os.path.join("/var/data", filename))
+
+
+@app.route("/fetch")
+def fetch():
+    host = urlparse(request.args.get("url", "")).hostname or ""
+    if host not in ALLOWED_HOSTS:
+        abort(400)
+    return requests.get("https://" + host).text
+
+
+@app.route("/go")
+def go():
+    target = request.args.get("next", "/home")
+    if target not in ALLOWED_PATHS:
+        target = "/home"
+    return redirect(target)
+
+
+@app.route("/trace")
+def trace():
+    trace_id = request.args.get("trace", "")
+    if not re.fullmatch(r"[A-Za-z0-9-]+", trace_id):
+        abort(400)
+    response = app.make_response("ok")
+    response.headers["X-Trace-Id"] = trace_id
+    return response
