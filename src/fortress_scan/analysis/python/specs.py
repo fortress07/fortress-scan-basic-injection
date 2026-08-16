@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
 from ...core.model import Category, Confidence
 
@@ -1045,6 +1045,24 @@ SQL_STATEMENT = re.compile(
     r"create\s+(?:table|view|index)\b|drop\s+(?:table|view|database)\b|alter\s+table\b|"
     r"union\s+(?:all\s+)?select\b|truncate\s+table\b|merge\s+into\b|with\s+\w+\s+as\s*\()"
 )
+
+# Nhánh `select\s+.+?\bfrom\b` là lazy dot-star: trên một chuỗi vài MB chứa
+# "select" mà không có "from", nó quét lại cả chuỗi tại MỖI vị trí select -
+# đo thực tế trên 2 MB là không bao giờ quay lại. Budget của engine chỉ đếm
+# node/token, không đếm thời gian regex, nên cần hai lớp riêng: cửa sổ giới
+# hạn chặn độ lớn một lần chạy, và spend() tính chi phí vào ngân sách để chặn
+# cả số lần chạy trên một tệp dày đặc payload.
+SQL_HINT_WINDOW = 256
+
+
+def looks_like_sql(
+    text: str, spend: Optional[Callable[[int], None]] = None
+) -> bool:
+    window = text[:SQL_HINT_WINDOW]
+    if spend is not None:
+        spend(2 + len(window))
+    return bool(SQL_STATEMENT.search(window))
+
 
 SHELL_METACHARACTERS = re.compile(r"[;&|`$><\n]|\|\||&&|\$\(")
 

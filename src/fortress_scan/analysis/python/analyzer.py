@@ -1228,7 +1228,7 @@ class Evaluator:
         if _receiver_matches(target.receiver, specs.SQL_METHOD_RECEIVER_HINTS):
             return True
         for value in argument_values[:1]:
-            if specs.SQL_STATEMENT.search(value.text):
+            if specs.looks_like_sql(value.text, self.module.budget.spend):
                 return True
         return False
 

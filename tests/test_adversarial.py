@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import os
+import time
 import socket
 import subprocess
 from pathlib import Path
@@ -1441,3 +1442,75 @@ class TestDocumentedGaps:
         ids = rule_ids(source)
         assert "FSB-CMD-001" not in ids
         assert "FSB-CMD-003" in ids
+
+
+class TestRedosInOwnRegexes:
+    """Regex của chính công cụ chạy trên mã không tin cậy phải có chặn.
+
+    Đo được thật trước khi sửa: nhánh `select\s+.+?\bfrom\b` là lazy
+    dot-star nên một chuỗi 2 MB chứa "select" mà không có "from" khiến lượt
+    quết không bao giờ quay lại - và budget của engine không đếm thời gian
+    regex. Lỗi nằm ngoài mọi hạn mức, tức là một tệp 2 MB đủ để từ chối dịch
+    vụ.
+    """
+
+    def test_giant_select_without_from_does_not_hang_the_scan(self, tmp_path: Path):
+        hostile = "select " + "a" * 2_000_000
+        (tmp_path / "app.py").write_text(
+            "def f(db):\n    db.query('" + hostile + "')\n", encoding="utf-8"
+        )
+        start = time.monotonic()
+        scan(str(tmp_path), Config())
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "lượt quét phải kết thúc nhanh, mất %.2fs" % elapsed
+
+    def test_giant_select_in_token_language_does_not_hang(self, tmp_path: Path):
+        (tmp_path / "app.js").write_text(
+            'db.query("' + ("select x; " * 200_000) + '");\n', encoding="utf-8"
+        )
+        start = time.monotonic()
+        scan(str(tmp_path), Config())
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "lượt quét phải kết thúc nhanh, mất %.2fs" % elapsed
+
+    def test_real_sql_statement_is_still_recognized(self):
+        """Receiver không có hint (svc, không phải cursor) thì cửa sổ hint
+        regex là thứ duy nhất quyết định - SQL thật dưới 256 ký tự phải vẫn
+        được nhận ra sau khi thêm cửa sổ giới hạn."""
+        source = (
+            "def f(svc, cond):\n"
+            "    sql = 'select id, name, email from users where active = 1"
+            " order by created_at desc'\n"
+            "    svc.execute(sql + cond)\n"
+        )
+        ids = rule_ids(source)
+        assert "FSB-SQL-002" in ids
+
+
+class TestCodecBombs:
+    """Codec biến đổi byte khai báo trong # coding: là vector bomb giải nén.
+
+    zlib_codec nén 100MB chữ 'a' thành vài trăm KB; một tệp như vậy khai báo
+    đúng codec sẽ khiến raw.decode() tạo chuỗi GB ngoài mọi hạn mức. Giờ khai
+    báo đó bị bỏ qua và tệp đọc theo UTF-8 như bảng mã không tồn tại.
+    """
+
+    def test_zlib_codec_declaration_is_ignored(self, tmp_path: Path):
+        import zlib
+
+        bomb = zlib.compress(b"a" * 100_000_000, 9)  # ~ hàng chục KB nén
+        (tmp_path / "bomb.py").write_bytes(b"# -*- coding: zlib_codec -*-\nx = 1\n" + bomb)
+        start = time.monotonic()
+        scan(str(tmp_path), Config())
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0
+        # Không cần tệp được phân tích: nội dung giải theo UTF-8 toàn byte
+        # nén là nhị phân nên bị bỏ qua như mọi tệp nhị phân khác - điều quan
+        # trọng là lượt quét không nổ bộ nhớ và không treo.
+
+    def test_normal_codec_still_honored(self, tmp_path: Path):
+        (tmp_path / "ok.py").write_bytes(
+            "# -*- coding: utf-8 -*-\nx = ' unicorn '\n".encode("utf-8")
+        )
+        result = scan(str(tmp_path), Config())
+        assert result.stats.files_analyzed == 1
