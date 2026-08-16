@@ -52,11 +52,17 @@ def to_sarif(result: ScanResult, tool_version: str) -> str:
 
     results: List[Dict[str, Any]] = []
     for finding in result.findings:
+        start_column = max(1, finding.column + 1)
+        # SARIF endColumn là loại trừ; điểm cuối 0-based của AST cũng loại
+        # trừ nên chỉ cần dịch 1. Kết quả token-based có thể ra vùng rộng 0
+        # nên chặn trên startColumn + 1 để không sinh vùng rỗng.
+        end_column = max(start_column + 1, finding.end_column + 1)
         results.append(
             {
                 "ruleId": finding.rule_id,
                 "level": _SARIF_LEVEL[finding.severity],
                 "message": {"text": finding.message},
+                "fingerprints": {"fortress-scan/v1": finding.fingerprint},
                 "partialFingerprints": {"fortress-scan/v1": finding.fingerprint},
                 "properties": {
                     "confidence": finding.confidence.label,
@@ -71,8 +77,9 @@ def to_sarif(result: ScanResult, tool_version: str) -> str:
                             },
                             "region": {
                                 "startLine": finding.line,
-                                "startColumn": max(1, finding.column + 1),
+                                "startColumn": start_column,
                                 "endLine": max(finding.line, finding.end_line),
+                                "endColumn": end_column,
                                 "snippet": {"text": finding.snippet},
                             },
                         }
