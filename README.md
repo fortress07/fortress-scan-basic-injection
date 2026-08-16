@@ -29,7 +29,7 @@ app/routes.py
           dòng 42  chạy tới cursor.execute()
 ```
 
-**27 rule, phủ 12 họ injection:** SQL, NoSQL, LDAP, XPath, OS command, code injection
+**31 rule, phủ 16 họ injection:** SQL, NoSQL, LDAP, XPath, OS command, code injection
 (`eval`/`exec`), template (SSTI), expression language, XSS, XXE, file inclusion, reflection.
 Kèm 3 nhóm liên quan: giải tuần tự không an toàn, Trojan Source / ký tự ẩn, và script cài đặt tải mã
 từ xa về chạy.
@@ -62,6 +62,10 @@ rule đăng ký phải có mẫu kích hoạt, nên bảng này không thể l�
 | XXE | `FSB-XML-001` high | `XMLParser(resolve_entities=True)` |
 | Trojan Source / ký tự ẩn | `FSB-UNI-001` high · `-002` med · `-003` low · `-004` med | ký tự đảo chiều bidi, ký tự rộng bằng không, token trộn bảng chữ cái |
 | Supply chain | `FSB-SUP-001` crit · `-002` low | `package.json` có `postinstall` tải script từ xa về chạy |
+| Path traversal | `FSB-PATH-001` high | `open('/data/' + ten_tu_input)`, `res.download(duong_dan_ng)` |
+| SSRF | `FSB-SSRF-001` high | `requests.get(url_tu_input)`, PHP `file_get_contents($url_ng)` |
+| Open redirect | `FSB-REDIR-001` med | `flask.redirect(request.args['next'])`, `res.redirect(req.query.next)` |
+| CRLF / header phản hồi | `FSB-HDR-001` high | `resp.headers['X-Trace'] = gia_tri_ng`, PHP `header($gia_tri_ng)` |
 
 ### Quét được những dự án nào ?
 
@@ -70,9 +74,9 @@ token nên chỉ bắt được dạng "nguồn -> biến -> sink" trong cùng m
 
 | Dự án của anh em viết bằng | Bắt được |
 | --- | --- |
-| **Python** - Flask, Django, FastAPI, CLI, script | 23/27 rule: command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode |
-| **JavaScript / TypeScript** - Express, Node | command, code (`eval`), SQL, dynamic `require`, XSS |
-| **PHP** - `$_GET`/`$_POST`/`$_COOKIE` | command, code (`eval`), SQL, `include`, `unserialize` |
+| **Python** - Flask, Django, FastAPI, CLI, script | 27/31 rule: command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode, path traversal, SSRF, redirect, header |
+| **JavaScript / TypeScript** - Express, Node | command, code (`eval`), SQL, dynamic `require`, XSS, SSRF (`fetch`), redirect, path (`fs.readFile`), header (`setHeader`) |
+| **PHP** - `$_GET`/`$_POST`/`$_COOKIE` | command, code (`eval`), SQL, `include`, `unserialize`, SSRF (`file_get_contents`), path (`fopen`), header (`header()`) |
 | **Ruby** - Rails-style `params` | command, code (`eval`), template (ERB), `Marshal.load` |
 | **Java/JVM** - Servlet `getParameter` | command, SQL, expression language (SpEL) |
 | **Go** - `net/http` + `database/sql` | command, SQL, template |

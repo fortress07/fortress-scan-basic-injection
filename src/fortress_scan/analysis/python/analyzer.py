@@ -467,9 +467,39 @@ class Evaluator:
             if isinstance(base, ast.Name):
                 existing = env.get(base.id, UNKNOWN)
                 env[base.id] = merge_values(existing, value)
+            self._check_header_store(target, value, env)
             return
         if isinstance(target, ast.Starred):
             self._bind(target.value, value, env)
+
+    def _check_header_store(
+        self, target: ast.Subscript, value: Value, env: Environment
+    ) -> None:
+        """Gán ``resp.headers[k] = v`` là sink ghi header HTTP của phản hồi.
+
+        Chỉ khớp khi container là một thuộc tính tên ``headers``: ghi subscript
+        vào dict thường quá phổ biến để từ đó suy ra đây là header. Vị trí
+        ``response['X'] = v`` của Django không có chữ ``headers`` nên không
+        bắt được -- nói rõ trong README thay vì đoán mò.
+        """
+        base = target.value
+        if not isinstance(base, ast.Attribute) or base.attr != "headers":
+            return
+        key = (
+            self._eval(target.slice, env)
+            if not isinstance(target.slice, ast.Slice)
+            else UNKNOWN
+        )
+        for candidate in (key, value):
+            self._flag(
+                rule_id="FSB-HDR-001",
+                dynamic_rule=None,
+                node=target,
+                category=Category.HTTP_HEADER,
+                symbol="headers[...] = ...",
+                description="ghi header HTTP của phản hồi",
+                value=candidate,
+            )
 
     def _eval(self, node: Optional[ast.expr], env: Environment) -> Value:
         if node is None:

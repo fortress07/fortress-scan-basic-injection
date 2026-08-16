@@ -534,6 +534,78 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
             "build không cần tới chúng."
         ),
     ),
+    RuleSpec(
+        id="FSB-PATH-001",
+        title="Dữ liệu không tin cậy quyết định đường dẫn tệp được mở",
+        category=Category.PATH,
+        severity=Severity.HIGH,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-22", "CWE-73"),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "Một đường dẫn có nguồn gốc từ bên ngoài, kẻ tấn công điều khiển được, đi thẳng vào "
+            "việc mở hoặc gửi tệp. Ký tự ../ ( hoặc ..\\ trên Windows ) trong giá trị đó đọc được "
+            "tệp nằm ngoài thư mục dự định, kể cả tệp cấu hình và bí mật."
+        ),
+        remediation=(
+            "Rút gọn về tên tệp bằng os.path.basename() hoặc secure_filename rồi mới ghép vào "
+            "thư mục gốc, hoặc kiểm tra os.path.realpath() nằm trong thư mục gốc trước khi mở."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-SSRF-001",
+        title="Dữ liệu không tin cậy quyết định URL ứng dụng tự gửi request tới",
+        category=Category.SSRF,
+        severity=Severity.HIGH,
+        confidence=Confidence.MEDIUM,
+        cwe=("CWE-918",),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "Một URL hoặc tên máy có nguồn gốc từ bên ngoài quyết định nơi ứng dụng tự gửi "
+            "request. Kẻ tấn công dùng điều đó đọc dịch vụ nội bộ ( metadata cloud, admin panel ) "
+            "từ phía máy chủ, quét mạng trong, hoặc biến máy chủ thành proxy hộ họ."
+        ),
+        remediation=(
+            "Cho phép danh sách máy cố định thay vì nhận URL thô; nếu phải nhận URL thì phân tích "
+            "bằng urlparse() và kiểm tra hostname trước, và chặn scheme khác http/https."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-REDIR-001",
+        title="Dữ liệu không tin cậy quyết định nơi chuyển hướng người dùng tới",
+        category=Category.REDIRECT,
+        severity=Severity.MEDIUM,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-601",),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "Một URL chuyển hướng có nguồn gốc từ bên ngoài đi thẳng vào lệnh redirect. Kẻ tấn "
+            "công gửi link mang địa chỉ thật của anh em nhưng nhảy sang trang giả mạo, tận dụng "
+            "niềm tin của người dùng vào tên miền của anh em."
+        ),
+        remediation=(
+            "Chỉ chấp nhận đường dẫn tương đối, hoặc đối chiếu hostname với một danh sách cho "
+            "phép trước khi chuyển hướng. Đừng truyền thẳng URL nhận được."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-HDR-001",
+        title="Dữ liệu không tin cậy chảy vào header HTTP của phản hồi",
+        category=Category.HTTP_HEADER,
+        severity=Severity.HIGH,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-113", "CWE-117"),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "Một giá trị có nguồn gốc từ bên ngoài đi thẳng vào header HTTP của phản hồi. Nếu nó "
+            "chứa CR/LF thì chèn được header tùy ý và tách thân phản hồi -- đặt lại Set-Cookie, "
+            "Content-Length sai lệch, hay thậm chí thay cả nội dung trang."
+        ),
+        remediation=(
+            "Từ chối giá trị chứa ký tự điều khiển bằng re.fullmatch() với bảng chữ cái cho phép "
+            "trước khi đặt vào header, hoặc encode giá trị theo RFC 5987."
+        ),
+    ),
 )
 
 RULES: Dict[str, RuleSpec] = {rule.id: rule for rule in _RULE_LIST}
