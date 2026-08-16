@@ -744,6 +744,9 @@ class Evaluator:
             handler_source = specs.HANDLER_METHODS.get(node.func.attr)
             if handler_source is not None and _is_self_reference(node.func.value):
                 return self._tainted(node, handler_source)
+            socket_source = specs.SOCKET_READ_METHODS.get(node.func.attr)
+            if socket_source is not None:
+                return self._tainted(node, socket_source)
 
         local = self.module.lookup_function(effective)
         if local is not None and local.node is not getattr(self.function, "node", None):

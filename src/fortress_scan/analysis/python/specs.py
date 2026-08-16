@@ -119,6 +119,18 @@ REQUEST_METHODS: Dict[str, SourceSpec] = {
     "get_arguments": SourceSpec("tham số truy vấn HTTP"),
 }
 
+# Code thật hầu như không gọi socket.recv() trực tiếp từ lớp mà qua một biến
+# giữ kết nối, nên khớp theo tên phương thức trên mọi receiver. Đọc từ socket
+# là dữ liệu từ bên ngoài dù nó đi qua biến, nên chỉ tin mức medium: kết nối
+# nội bộ giữa hai dịch vụ của chính mình không nhất thiết là không tin cậy.
+SOCKET_READ_METHODS: Dict[str, SourceSpec] = {
+    "recv": SourceSpec("socket mạng", Confidence.MEDIUM),
+    "recvfrom": SourceSpec("socket mạng", Confidence.MEDIUM),
+    "recv_into": SourceSpec("socket mạng", Confidence.MEDIUM),
+    "recvmsg": SourceSpec("socket mạng", Confidence.MEDIUM),
+    "recvmsg_into": SourceSpec("socket mạng", Confidence.MEDIUM),
+}
+
 HANDLER_METHODS: Dict[str, SourceSpec] = {
     "get_argument": SourceSpec("tham số truy vấn HTTP"),
     "get_arguments": SourceSpec("tham số truy vấn HTTP"),

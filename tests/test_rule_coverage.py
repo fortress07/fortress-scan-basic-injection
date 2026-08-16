@@ -184,6 +184,15 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
         "def doc(duong_dan):\n"
         "    with open(duong_dan) as f:\n        return json.loads(f.read())\n",
     ),
+    "FSB-EL-001": (
+        JAVA,
+        "public class H {\n"
+        "  public void run(HttpServletRequest request) {\n"
+        '    Expression e = parser.parseExpression("name");\n'
+        "    String v = (String) e.getValue();\n"
+        "  }\n"
+        "}\n",
+    ),
     "FSB-EXEC-001": (
         PYTHON,
         "from flask import request\ndef h():\n    return int(request.args.get('n')) + 1\n",
@@ -202,10 +211,27 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
         PYTHON,
         "import importlib\ndef nap():\n    return importlib.import_module('json')\n",
     ),
+    "FSB-LDAP-001": (
+        PYTHON,
+        "import ldap.filter\nfrom flask import request\n"
+        "def tim(conn):\n"
+        "    loc = '(uid=' + ldap.filter.escape_filter_chars(request.args.get('u')) + ')'\n"
+        "    return conn.search_s('dc=x', 2, loc)\n",
+    ),
     "FSB-NOSQL-001": (
         PYTHON,
         "from flask import request\n"
         "def h(col):\n    return col.find({'ten': str(request.args.get('f'))})\n",
+    ),
+    "FSB-REFL-001": (
+        PYTHON,
+        "from flask import request\n"
+        "CHO_PHEP = {'ham_a': 1, 'ham_b': 2}\n"
+        "def h(doi_tuong):\n"
+        "    ten = request.args.get('f')\n"
+        "    if ten in CHO_PHEP:\n"
+        "        return getattr(doi_tuong, ten)\n"
+        "    raise ValueError('ten khong hop le')\n",
     ),
     "FSB-SQL-001": (
         PYTHON,
@@ -221,6 +247,10 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
     "FSB-SUP-001": (
         MANIFEST,
         '{\n  "scripts": {\n    "build": "tsc --build",\n    "test": "jest"\n  }\n}\n',
+    ),
+    "FSB-SUP-002": (
+        MANIFEST,
+        '{\n  "scripts": {\n    "postinstall": "node scripts/setup.js"\n  }\n}\n',
     ),
     "FSB-TMPL-001": (
         PYTHON,
@@ -238,6 +268,12 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
     "FSB-XML-001": (
         PYTHON,
         "from lxml import etree\nparser = etree.XMLParser(resolve_entities=False)\n",
+    ),
+    "FSB-XPATH-001": (
+        PYTHON,
+        "from flask import request\n"
+        "def tim(tree):\n"
+        "    return tree.xpath('//user[name=$n]', n=request.args.get('n'))\n",
     ),
     "FSB-XSS-001": (
         JAVASCRIPT,
