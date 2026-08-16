@@ -14,7 +14,8 @@ tệp trung gian, rồi dừng.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+import builtins
+from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 from .analyzer import FunctionInfo, Summary
 
@@ -25,6 +26,22 @@ FOREIGN_NODE = object()
 
 MAX_INDEX_MODULES = 5000
 MAX_INDEX_FUNCTIONS = 20000
+
+# Tên trần trùng với một builtin thì KHÔNG BAO GIỜ được tra qua chỉ mục dự án.
+#
+# `map(...)` trong một tệp không import `map` là builtin, chứ không phải
+# `Style.map` của tkinter/ttk.py. Trước đây chỉ mục vẫn nối hai thứ đó, và vì
+# summary của `Style.map` nói giá trị trả về chỉ sinh ra từ tham số của NÓ,
+# taint thật mang theo đối số bị vứt: chuỗi socket -> fileConfig -> eval trong
+# logging/config.py tụt từ FSB-EXEC-001 ( có vết nhiễm, kèm đường đi ) xuống
+# FSB-EXEC-002 ( chỉ "giá trị không phải hằng" ) - tức bật phân tích xuyên
+# file lại làm phát hiện YẾU đi. Đối chiếu cả stdlib còn thấy `str` nối về
+# locale.py, `set` về Treeview.set, `filter` về Filterer.filter.
+#
+# Hàm người dùng tự đặt trùng tên builtin vẫn hoạt động bình thường: lời gọi
+# `from helpers import map` rồi `map(...)` được ImportMap phân giải thành
+# `helpers.map` nên đi đường dotted, không đụng bảng tên trần này.
+_BUILTIN_NAMES: FrozenSet[str] = frozenset(dir(builtins))
 
 
 def module_names(relative_path: str) -> Tuple[str, ...]:
@@ -55,11 +72,39 @@ class ProjectIndex:
     """Bảng summary hàm của toàn dự án, tra theo tên import hoặc tên đơn."""
 
     def __init__(self) -> None:
-        self._dotted: Dict[str, List[FunctionInfo]] = {}
-        self._simple: Dict[str, List[FunctionInfo]] = {}
+        self._dotted: Dict[str, FunctionInfo] = {}
+        self._simple: Dict[str, FunctionInfo] = {}
+        # Tên đã từng đụng độ phải ở lại "mập mờ" VĨNH VIỄN. Trước đây đụng độ
+        # chỉ được xử lý bằng cách xóa khóa cuối mỗi lần register, nên module
+        # thứ ba dùng lại tên đó tạo lại khóa với đúng một phần tử và giành
+        # được liên kết: 3 module cùng định nghĩa `run` thì `run` trỏ về module
+        # cuối, 4 module thì lại sạch - sai theo tính chẵn lẻ. Tên phổ biến
+        # ( run, query, execute, handle ) đụng nhau khắp mọi repo thật, và cái
+        # giá là taint xuyên file quy sink về NHẦM tệp.
+        self._ambiguous_dotted: Set[str] = set()
+        self._ambiguous_simple: Set[str] = set()
         self.functions_registered = 0
         self.modules_registered = 0
         self.full = False
+
+    @staticmethod
+    def _bind(
+        table: Dict[str, FunctionInfo],
+        ambiguous: Set[str],
+        key: str,
+        info: FunctionInfo,
+    ) -> None:
+        """Giữ liên kết chỉ khi tên còn trỏ về đúng một hàm."""
+        if key in ambiguous:
+            return
+        current = table.get(key)
+        if current is None:
+            table[key] = info
+        elif current is not info:
+            # Một tên trỏ về nhiều hàm khác nhau thì mọi liên kết theo tên đó
+            # đều mất giá trị: bỏ hẳn thay vì đoán mò một bên.
+            del table[key]
+            ambiguous.add(key)
 
     def register(
         self,
@@ -95,17 +140,16 @@ class ProjectIndex:
                 summary=summary,
                 origin_path=relative_path.replace("\\", "/"),
             )
-            self._simple.setdefault(info.simple_name, []).append(foreign)
+            if info.simple_name not in _BUILTIN_NAMES:
+                self._bind(self._simple, self._ambiguous_simple, info.simple_name, foreign)
             for module_name in names:
-                self._dotted.setdefault("%s.%s" % (module_name, qualname), []).append(
-                    foreign
+                self._bind(
+                    self._dotted,
+                    self._ambiguous_dotted,
+                    "%s.%s" % (module_name, qualname),
+                    foreign,
                 )
             self.functions_registered += 1
-        # Một tên trỏ về nhiều hàm khác nhau thì mọi liên kết theo tên đó
-        # đều mất giá trị: bỏ hết thay vì đoán mò một bên.
-        for table in (self._dotted, self._simple):
-            for key in [key for key, items in table.items() if len(items) > 1]:
-                del table[key]
 
     def lookup(
         self, qualname: Optional[str], *, allow_simple: bool = True
@@ -120,12 +164,8 @@ class ProjectIndex:
         if not qualname:
             return None
         exact = self._dotted.get(qualname)
-        if exact:
-            return exact[0]
+        if exact is not None:
+            return exact
         if not allow_simple:
             return None
-        simple = qualname.rsplit(".", 1)[-1]
-        candidates = self._simple.get(simple)
-        if candidates:
-            return candidates[0]
-        return None
+        return self._simple.get(qualname.rsplit(".", 1)[-1])

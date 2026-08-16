@@ -207,15 +207,24 @@ class _Analysis:
                 and statement[next_index].kind == OP
                 and statement[next_index].text == "("
             )
+            # Token cuối của chuỗi gọi ( `exec` trong `child_process.exec` ):
+            # dùng làm điểm cuối của vùng báo lỗi để SARIF tô đúng lời gọi.
+            chain_end = statement[next_index - 1] if next_index > index else statement[index]
             if opens_call:
                 arguments, _ = _read_arguments(statement, next_index)
-                self._check_call(chain, statement[index], arguments)
+                self._check_call(chain, statement[index], arguments, chain_end)
             elif chain in self.spec.bare_call_names:
-                self._check_call(chain, statement[index], [list(statement[next_index:])])
+                self._check_call(
+                    chain, statement[index], [list(statement[next_index:])], chain_end
+                )
             index = max(next_index, index + 1)
 
     def _check_call(
-        self, chain: str, anchor: Token, arguments: Sequence[Sequence[Token]]
+        self,
+        chain: str,
+        anchor: Token,
+        arguments: Sequence[Sequence[Token]],
+        anchor_end: Optional[Token] = None,
     ) -> None:
         sink = _match_sink(chain, self.spec)
         if sink is None:
@@ -233,6 +242,7 @@ class _Analysis:
                     tokens=wrapped,
                     mark=self._taint_of(wrapped),
                     anchor=anchor,
+                    anchor_end=anchor_end,
                     confidence=Confidence.HIGH,
                 )
                 return
@@ -251,6 +261,7 @@ class _Analysis:
             tokens=selected,
             mark=mark,
             anchor=anchor,
+            anchor_end=anchor_end,
             confidence=sink.confidence,
         )
 
@@ -322,6 +333,8 @@ class _Analysis:
                 symbol=token.text,
                 message="%s được khai triển không có nháy kép trong câu lệnh; hãy viết \"%s\""
                 % (mark.label, token.text),
+                end_line=token.line,
+                end_column=token.column + len(token.text),
                 trace=(
                     self.builder.step(StepKind.SOURCE, mark.line, 0, mark.label),
                     self.builder.step(
@@ -340,10 +353,12 @@ class _Analysis:
         mark: Optional[TaintMark],
         anchor: Optional[Token] = None,
         confidence: Confidence = Confidence.MEDIUM,
+        anchor_end: Optional[Token] = None,
     ) -> None:
         target = anchor or (tokens[0] if tokens else None)
         if target is None:
             return
+        end_line, end_column = _region_end(target, anchor_end)
         # Bộ khử độc đã chạy trên đường đi chỉ có giá trị cho ĐÚNG nhóm của nó.
         # htmlspecialchars() rồi đem vào system() thì vết nhiễm vẫn còn sống,
         # nên chỗ này hỏi lại theo nhóm của chính rule sắp báo.
@@ -361,6 +376,8 @@ class _Analysis:
                 column=target.column,
                 symbol=symbol,
                 message="%s chạy tới %s mà chưa được vô hiệu hóa" % (mark.label, description),
+                end_line=end_line,
+                end_column=end_column,
                 confidence=min(confidence, mark.confidence),
                 trace=(
                     self.builder.step(StepKind.SOURCE, mark.line, 0, "%s đi vào từ đây" % mark.label),
@@ -378,6 +395,8 @@ class _Analysis:
             column=target.column,
             symbol=symbol,
             message="%s nhận một giá trị không phải hằng" % description,
+            end_line=end_line,
+            end_column=end_column,
             trace=(
                 self.builder.step(StepKind.SINK, target.line, target.column, description),
             ),
@@ -675,6 +694,28 @@ _ALWAYS_SQL = frozenset(
         "createSQLQuery",
     }
 )
+
+
+def _region_end(
+    anchor: Token, anchor_end: Optional[Token]
+) -> Tuple[Optional[int], Optional[int]]:
+    """Điểm cuối của vùng báo lỗi, hoặc (None, None) nếu không chắc chắn.
+
+    Chỉ nhận token IDENT đọc thẳng từ nguồn: với STRING thì `text` là phần
+    thân đã bỏ nháy nên `column + len(text)` không còn là vị trí thật, còn
+    token nội suy mang vị trí của cả chuỗi bọc ngoài. Thà để vùng rộng một ký
+    tự như trước còn hơn tô sai đoạn mã.
+    """
+    candidate = anchor_end if anchor_end is not None else anchor
+    if candidate.kind != IDENT or candidate.in_string or candidate.interpolated:
+        candidate = anchor
+    if candidate.kind != IDENT or candidate.in_string or candidate.interpolated:
+        return None, None
+    if candidate.line < anchor.line:
+        return None, None
+    if candidate.line == anchor.line and candidate.column < anchor.column:
+        return None, None
+    return candidate.line, candidate.column + len(candidate.text)
 
 
 def _select_sql_argument(

@@ -275,3 +275,229 @@ def test_method_call_never_binds_to_foreign_same_name_function(tmp_path: Path):
     )
     result = scan(str(tmp_path), Config())
     assert "FSB-CMD-001" in _ids(result)
+
+
+def test_ambiguous_simple_name_stays_ambiguous_for_any_module_count(tmp_path: Path):
+    """Tên đụng độ phải mất liên kết VĨNH VIỄN, không theo tính chẵn lẻ.
+
+    Chỉ mục từng xử lý đụng độ bằng cách xóa khóa ở cuối mỗi lần register.
+    Module thứ ba dùng lại tên đó tạo lại khóa với đúng một phần tử và giành
+    được liên kết, nên 3 module cùng định nghĩa `run_cmd` thì `run_cmd` trỏ
+    về module cuối còn 4 module thì lại sạch. Hệ quả: taint xuyên file quy
+    sink về NHẦM tệp tùy số lượng module - và tên phổ biến ( run, query,
+    execute, handle ) đụng nhau khắp mọi repo thật.
+    """
+    from fortress_scan.analysis.python.analyzer import FunctionInfo, SinkHit, Summary
+    from fortress_scan.analysis.python.project import ProjectIndex
+    from fortress_scan.core.model import Category
+
+    def info(path: str) -> FunctionInfo:
+        hit = SinkHit(
+            parameter="value",
+            rule_id="FSB-CMD-001",
+            category=Category.COMMAND,
+            line=1,
+            column=0,
+            symbol="os.system",
+            description="sink",
+        )
+        return FunctionInfo(
+            node=object(),
+            qualname="run_cmd",
+            simple_name="run_cmd",
+            parameters=("value",),
+            handler_sources={},
+            summary=Summary(sinks=frozenset({hit})),
+            origin_path=path,
+        )
+
+    for module_count in range(2, 8):
+        index = ProjectIndex()
+        for number in range(module_count):
+            path = "pkg/mod%d.py" % number
+            entry = info(path)
+            index.register(path, {"run_cmd": entry}, {"run_cmd": entry.summary})
+        assert index.lookup("run_cmd") is None, (
+            "%d module cùng tên vẫn trả về một liên kết" % module_count
+        )
+
+
+def test_unique_name_still_resolves_across_files(tmp_path: Path):
+    """Bảo vệ chiều ngược lại: chống đụng độ không được làm câm tên duy nhất."""
+    _write(
+        tmp_path,
+        "app.py",
+        "from flask import request\n"
+        "from only_helper import uniquely_named_runner\n"
+        "def handler():\n"
+        "    return uniquely_named_runner(request.args.get('c'))\n",
+    )
+    _write(
+        tmp_path,
+        "only_helper.py",
+        "import os\n"
+        "def uniquely_named_runner(value):\n"
+        "    os.system('ping ' + value)\n",
+    )
+    result = scan(str(tmp_path), Config())
+    assert "FSB-CMD-001" in _ids(result)
+
+
+def test_three_way_name_collision_does_not_invent_a_cross_file_trace(tmp_path: Path):
+    """Đầu-đến-cuối cho cùng lỗi: 3 module định nghĩa `handle`, và chỉ một
+    trong số đó có sink. Không có import nào nối tới nó, nên không được có
+    phát hiện xuyên file nào trỏ sang tệp khác."""
+    _write(
+        tmp_path,
+        "app.py",
+        "from flask import request\n"
+        "def view(obj):\n"
+        "    return obj.handle(request.args.get('q'))\n",
+    )
+    for number, body in enumerate(
+        (
+            "    return 'an toan'\n",
+            "    return value.strip()\n",
+            "    import os\n    os.system('ping ' + value)\n",
+        )
+    ):
+        _write(tmp_path, "mod%d.py" % number, "def handle(value):\n%s" % body)
+    result = scan(str(tmp_path), Config())
+    cross = [f for f in result.findings if f.path == "app.py" and f.rule_id == "FSB-CMD-001"]
+    assert not cross, "gán nhầm summary của một module trùng tên cho obj.handle()"
+
+
+def test_bare_builtin_name_never_binds_to_a_foreign_function(tmp_path: Path):
+    """`map(...)` trong tệp không import `map` là builtin, không phải hàm
+    trùng tên ở module khác.
+
+    Chỉ mục từng nối hai thứ đó, và vì summary của hàm lạ nói giá trị trả về
+    chỉ sinh từ THAM SỐ CỦA NÓ, taint thật mang theo đối số bị vứt - phát
+    hiện tụt từ "có vết nhiễm" xuống "giá trị không phải hằng". Đối chiếu cả
+    stdlib bắt được đúng dạng này: socket -> fileConfig -> eval trong
+    logging/config.py bị hạ cấp chỉ vì tkinter/ttk.py có `Style.map`.
+    """
+    # `query_opt` mới là thứ được trả về, còn `style` - chỗ mà đối số nhiễm
+    # rơi vào khi lời gọi trần bị nối nhầm sang đây - thì không. Đó chính là
+    # cách vết nhiễm bị vứt âm thầm.
+    _write(
+        tmp_path,
+        "widget.py",
+        "class Style:\n"
+        "    def map(self, style, query_opt='mac dinh'):\n"
+        "        return query_opt\n",
+    )
+    # Đúng hình dạng của logging/config.py: một helper trả thẳng kết quả
+    # map() rồi giá trị đó chạy tiếp tới sink.
+    _write(
+        tmp_path,
+        "app.py",
+        "from flask import request\n"
+        "import os\n"
+        "def _strip_spaces(alist):\n"
+        "    return map(str.strip, alist)\n"
+        "def handler():\n"
+        "    data = _strip_spaces(request.args.get('q'))\n"
+        "    os.system('ping ' + str(data))\n",
+    )
+    result = scan(str(tmp_path), Config())
+    ids = _ids(result)
+    # FSB-CMD-001 = có vết nhiễm ( kèm đường đi ); FSB-CMD-003 = chỉ "giá trị
+    # không phải hằng". Nối nhầm builtin làm phát hiện tụt xuống loại yếu.
+    assert "FSB-CMD-001" in ids, (
+        "builtin bi nham voi ham cung ten o module khac nen vet nhiem bi vut: %s" % sorted(ids)
+    )
+
+
+def test_project_index_never_hands_out_a_builtin_name(tmp_path: Path):
+    """Chốt thẳng ở tầng chỉ mục: tên trần trùng builtin không bao giờ được
+    trả về, dù module kia có định nghĩa hàm trùng tên."""
+    from fortress_scan.analysis.python.analyzer import FunctionInfo, SinkHit, Summary
+    from fortress_scan.analysis.python.project import ProjectIndex
+    from fortress_scan.core.model import Category
+
+    hit = SinkHit(
+        parameter="value",
+        rule_id="FSB-CMD-001",
+        category=Category.COMMAND,
+        line=1,
+        column=0,
+        symbol="os.system",
+        description="sink",
+    )
+    index = ProjectIndex()
+    for name in ("map", "filter", "str", "set", "__import__", "open"):
+        entry = FunctionInfo(
+            node=object(),
+            qualname="Style.%s" % name,
+            simple_name=name,
+            parameters=("value",),
+            handler_sources={},
+            summary=Summary(sinks=frozenset({hit})),
+            origin_path="widget.py",
+        )
+        index.register("widget.py", {entry.qualname: entry}, {entry.qualname: entry.summary})
+    for name in ("map", "filter", "str", "set", "__import__", "open"):
+        assert index.lookup(name) is None, "ten trung builtin %r van duoc noi" % name
+
+
+def test_user_function_named_like_a_builtin_still_resolves_when_imported(tmp_path: Path):
+    """Chiều ngược lại: import tường minh thì vẫn phải nối được.
+
+    Lời gọi đã import đi đường dotted nên việc chặn tên trần trùng builtin
+    không được đụng tới nó.
+    """
+    _write(
+        tmp_path,
+        "helpers.py",
+        "import os\n"
+        "def filter(value):\n"
+        "    os.system('ping ' + value)\n",
+    )
+    _write(
+        tmp_path,
+        "app.py",
+        "from flask import request\n"
+        "from helpers import filter\n"
+        "def handler():\n"
+        "    return filter(request.args.get('c'))\n",
+    )
+    result = scan(str(tmp_path), Config())
+    assert "FSB-CMD-001" in _ids(result)
+
+
+def test_foreign_sink_line_is_never_reported_in_the_caller_file(tmp_path: Path):
+    """Dòng của sink ở tệp khác không được báo theo tọa độ của tệp gọi.
+
+    SinkHit chép `line` vào summary mà không nhớ tệp gốc, nên khi một hàm
+    CÙNG TỆP mang theo sink của tệp khác, phát hiện được báo ở dòng ấy trong
+    tệp gọi. Đối chiếu stdlib ra một phát hiện ở logging/config.py dòng 1339
+    trong khi tệp đó chỉ có 1066 dòng - vị trí không tồn tại.
+    """
+    padding = "\n".join("# dong dem %d" % index for index in range(40))
+    _write(
+        tmp_path,
+        "deep.py",
+        "import os\n%s\ndef deep_sink(value):\n    os.system('ping ' + value)\n" % padding,
+    )
+    app_source = (
+        "from flask import request\n"
+        "from deep import deep_sink\n"
+        "def local_wrapper(value):\n"
+        "    return deep_sink(value)\n"
+        "def handler():\n"
+        "    return local_wrapper(request.args.get('q'))\n"
+    )
+    _write(tmp_path, "app.py", app_source)
+    app_lines = len(app_source.split("\n"))
+    result = scan(str(tmp_path), Config())
+    for finding in result.findings:
+        if finding.path == "app.py":
+            assert finding.line <= app_lines, (
+                "bao o dong %d trong app.py chi co %d dong" % (finding.line, app_lines)
+            )
+        for step in finding.trace:
+            if (step.path or finding.path) == "app.py":
+                assert step.line <= app_lines, (
+                    "buoc trace tro toi dong %d trong app.py" % step.line
+                )

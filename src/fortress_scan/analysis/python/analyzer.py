@@ -56,6 +56,12 @@ class SinkHit:
     column: int
     symbol: str
     description: str
+    # Tệp mà `line`/`column` thuộc về; rỗng nghĩa là cùng tệp với hàm đã ghi
+    # lại sink này. Thiếu trường này thì dòng của một sink ở tệp khác bị chép
+    # vào summary rồi báo theo hệ tọa độ của tệp GỌI: đối chiếu stdlib từng ra
+    # một phát hiện ở logging/config.py dòng 1339 trong khi tệp đó chỉ có 1066
+    # dòng - một vị trí không tồn tại.
+    origin_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -1009,12 +1015,19 @@ class Evaluator:
                         column=hit.column,
                         symbol=hit.symbol,
                         description=hit.description,
+                        # Sink giữ nguyên tệp gốc của nó khi đi vào summary
+                        # của hàm đang xét, để tệp gọi ở lượt sau không báo
+                        # dòng ấy như dòng của chính mình.
+                        origin_path=hit.origin_path or callee.origin_path,
                     )
                 )
             return
         if taint.parameters:
             return
-        if callee.origin_path:
+        # hit.line/hit.column thuộc về hit.origin_path khi trường đó có giá
+        # trị, nên nó được ưu tiên hơn tệp của hàm trung gian đang được gọi.
+        origin_path = hit.origin_path or callee.origin_path
+        if origin_path:
             # Sink nằm ở tệp khác: vị trí phát hiện là lời gọi ( cùng tệp với
             # đường đi đã biết ), còn bước sink trong đường đi chỉ rõ tệp và
             # dòng thật của nó để anh em nhảy thẳng tới chỗ cần sửa.
@@ -1023,7 +1036,7 @@ class Evaluator:
                 hit.line,
                 hit.column,
                 "chạy tới %s" % hit.description,
-                path=callee.origin_path,
+                path=origin_path,
             )
             self.builder.add(
                 rule_id=hit.rule_id,
@@ -1031,7 +1044,7 @@ class Evaluator:
                 column=node.col_offset,
                 symbol=hit.symbol,
                 message="%s đi qua %s() trong %s rồi vào %s"
-                % (taint.describe(), callee.simple_name, callee.origin_path, hit.description),
+                % (taint.describe(), callee.simple_name, origin_path, hit.description),
                 confidence=_confidence_for(taint),
                 trace=tuple(taint.trace) + (call_step, sink_step),
                 tags=("interprocedural", "cross-file"),
