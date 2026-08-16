@@ -247,3 +247,31 @@ def test_scan_source_stays_single_file():
     findings = scan_source(source, PYTHON, "app.py", Config())
     # Không có nguồn nào ở đây, chỉ có dạng động; giữ nguyên kỳ vọng cũ.
     assert all(f.rule_id != "FSB-CMD-001" for f in findings)
+
+
+def test_method_call_never_binds_to_foreign_same_name_function(tmp_path: Path):
+    """`cp.read(x)` là lời gọi phương thức, không được nhận summary của
+    `def read(x)` ở module khác.
+
+    Bug thật bắt được khi đối chiếu stdlib: fallback tên-trần từng áp cho cả
+    attribute call, khiến chuỗi taint socket -> fileConfig -> eval trong
+    logging/config.py bị cắt oan chỉ vì một module khác có hàm trùng tên
+    `read` với summary 'tham số không sống qua return'.
+    """
+    _write(
+        tmp_path,
+        "app.py",
+        "from flask import request\n"
+        "import os\n"
+        "def handler(cp):\n"
+        "    data = cp.read(request.args.get('q'))\n"
+        "    os.system('run ' + data)\n",
+    )
+    _write(
+        tmp_path,
+        "reader.py",
+        "def read(value):\n"
+        "    return 'hằng an toàn'\n",
+    )
+    result = scan(str(tmp_path), Config())
+    assert "FSB-CMD-001" in _ids(result)

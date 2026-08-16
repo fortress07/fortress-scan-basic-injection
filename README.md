@@ -42,7 +42,8 @@ Xem đầy đủ: `python -m fortress_scan --list-rules`
 ### Có gì mới trong 0.2.0
 
 - **Taint xuyên file cho Python** - nguồn ở tệp này chạy qua helper ở tệp khác rồi nổ ở tệp thứ ba
-  vẫn được nối. Phát hiện nằm tại chỗ gọi, đường đi in rõ tệp và dòng của sink thật.
+  vẫn được nối. Phát hiện nằm tại chỗ gọi, đường đi in rõ tệp và dòng của sink thật. Giá thuê: phần
+  Python chậm thêm khoảng 2.5-3 lần ( hai vòng thu thập ) - đã đo trên 148 tệp stdlib là 3.5s -> 9.5s.
 - **4 họ lỗ hổng mới**: path traversal (`FSB-PATH-001`), SSRF (`FSB-SSRF-001`), open redirect
   (`FSB-REDIR-001`), CRLF/header phản hồi (`FSB-HDR-001`) - tổng 31 rule / 16 họ.
 - `socket.recv()` gọi qua biến giờ là nguồn được nhận ra ( 0.1 từng bỏ sót ).

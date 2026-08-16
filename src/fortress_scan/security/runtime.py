@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import socket
-import subprocess
+# Module này NHẬP subprocess chỉ để vá chặn nó ( xem _PROCESS_TARGETS bên
+# dưới ); công cụ không bao giờ chạy tiến trình nào.
+import subprocess  # nosec B404
 import sys
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -116,6 +118,17 @@ def is_engaged() -> bool:
     return _PATCHED
 
 
+def _running_as_windows_admin() -> bool:
+    """Kểm tra quyền Administrator trên Windows; sai nền tảng hoặc lỗi probe
+    thì coi như không ( chỉ thiếu một dòng cảnh báo, không đáng ném lỗi )."""
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 def elevated_privilege_warnings() -> List[str]:
     warnings: List[str] = []
     getuid = getattr(os, "geteuid", None)
@@ -123,14 +136,8 @@ def elevated_privilege_warnings() -> List[str]:
         warnings.append(
             "đang chạy bằng quyền root; hãy quét mã không tin cậy bằng tài khoản thường"
         )
-    if os.name == "nt":
-        try:
-            import ctypes
-
-            if ctypes.windll.shell32.IsUserAnAdmin():
-                warnings.append(
-                    "đang chạy bằng quyền Administrator; hãy quét mã không tin cậy bằng tài khoản thường"
-                )
-        except Exception:
-            pass
+    if os.name == "nt" and _running_as_windows_admin():
+        warnings.append(
+            "đang chạy bằng quyền Administrator; hãy quét mã không tin cậy bằng tài khoản thường"
+        )
     return warnings
