@@ -33,6 +33,10 @@ _NETWORK_TARGETS: Tuple[Tuple[Any, str], ...] = (
     (socket, "create_server"),
 )
 
+# Đây là dây chuyền cảnh báo chứ không phải rào cản: mã bị quét không bao giờ
+# được chạy, nên list này tồn tại để một lỗi tương lai nào đó chạm vào primitive
+# tạo tiến trình sẽ bị phát hiện ngay. Nhớ phủ cả các biến thể ``l`` của họ
+# exec*/spawn* -- trên nền tảng nào đó chúng tồn tại độc lập với họ ``v``.
 _PROCESS_TARGETS: Tuple[Tuple[Any, str], ...] = (
     (subprocess, "Popen"),
     (subprocess, "run"),
@@ -45,12 +49,31 @@ _PROCESS_TARGETS: Tuple[Tuple[Any, str], ...] = (
     (os, "execve"),
     (os, "execvp"),
     (os, "execvpe"),
+    (os, "execl"),
+    (os, "execle"),
+    (os, "execlp"),
     (os, "spawnv"),
     (os, "spawnve"),
+    (os, "spawnvp"),
+    (os, "spawnvpe"),
+    (os, "spawnl"),
+    (os, "spawnle"),
+    (os, "spawnlp"),
+    (os, "spawnlpe"),
     (os, "posix_spawn"),
+    (os, "posix_spawnp"),
     (os, "fork"),
     (os, "forkpty"),
+    (os, "startfile"),
 )
+
+# pty chỉ tồn tại trên POSIX; bỏ qua nếu nền tảng không có.
+try:
+    import pty
+except ImportError:
+    pty = None  # type: ignore[assignment]
+if pty is not None:
+    _PROCESS_TARGETS = _PROCESS_TARGETS + ((pty, "spawn"),)
 
 
 def engage() -> None:

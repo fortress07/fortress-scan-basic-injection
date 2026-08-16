@@ -346,8 +346,19 @@ def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]
             % safe_text.display_path(str(source)),
             "liên kết ở vị trí này trỏ được ra ngoài cây quét, nên công cụ không đọc nó",
         )
-    data = load_config_file(source)
-    return build_config(data, config), _project_config_notices(source, data)
+    # Một tệp cấu hình hỏng hoặc độc hại trong cây bị quét cũng phải chết theo
+    # kiểu giống nhau: báo rõ ra rồi quét tiếp với cấu hình mặc định. Cho nó
+    # chết cả lượt quét thì một repo lạ đủ làm công cụ vô dụng -- người dùng
+    # mất toàn bộ báo cáo chỉ vì một tệp mình không hề viết.
+    try:
+        data = load_config_file(source)
+        return build_config(data, config), _project_config_notices(source, data)
+    except ConfigError as exc:
+        return config, (
+            "%s không đọc được nên đã bị bỏ qua; lượt quét dùng cấu hình mặc định"
+            % safe_text.display_path(str(source)),
+            str(exc),
+        )
 
 
 def _resolve_config(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
