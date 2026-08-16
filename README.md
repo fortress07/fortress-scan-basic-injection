@@ -39,6 +39,21 @@ từ xa về chạy.
 
 Xem đầy đủ: `python -m fortress_scan --list-rules`
 
+### Có gì mới trong 0.2.0
+
+- **Taint xuyên file cho Python** - nguồn ở tệp này chạy qua helper ở tệp khác rồi nổ ở tệp thứ ba
+  vẫn được nối. Phát hiện nằm tại chỗ gọi, đường đi in rõ tệp và dòng của sink thật.
+- **4 họ lỗ hổng mới**: path traversal (`FSB-PATH-001`), SSRF (`FSB-SSRF-001`), open redirect
+  (`FSB-REDIR-001`), CRLF/header phản hồi (`FSB-HDR-001`) - tổng 31 rule / 16 họ.
+- `socket.recv()` gọi qua biến giờ là nguồn được nhận ra ( 0.1 từng bỏ sót ).
+- **Chống false positive** hết mức có kiểm chứng: cả 31 rule đều có cặp mẫu-nổi/mẫu-im hồi quy;
+  `flask.abort()`/`sys.exit()` trong guard giờ thực sự vô hiệu hóa taint.
+- **SARIF** có `endColumn` và `fingerprints` đầy đủ để GitHub Code Scanning định danh cảnh báo
+  chính xác xuyên các lần chạy.
+- Tự kiểm toán bảo mật trên chính công cụ ( sink-first + PoC bằng repo thù địch ): sandbox chặn
+  hết mọi primitive tạo tiến trình theo nền tảng, tệp cấu hình hỏng trong cây bị quét không còn
+  giết được cả lượt quét.
+
 ### Quét được những lỗ hổng nào ? ( đọc kĩ nhé vì còn một vài vuln chưa được cập nhật )
 
 Mỗi rule dưới đây đều có **mẫu mã nguồn thật làm nó active** và ( với đa số ) **một mẫu an toàn tương ứng
@@ -92,9 +107,9 @@ token nên chỉ bắt được dạng "nguồn -> biến -> sink" trong cùng m
 Biến môi trường (`os.getenv`) và tham số dòng lệnh (`argparse`) **mặc định tắt** vì hay báo nhầm -
 bật bằng `--include-env-sources` thì chúng cũng lên critical.
 
-Ngược lại, `socket.recv()` **đã thử và không nhận ra** (chỉ còn medium): công cụ chỉ khớp đúng tên
-`socket.socket.recv`, mà code thật hầu như luôn gọi qua biến. Dữ liệu đọc thẳng từ socket xin tự
-kiểm tra bằng tay.
+Đọc từ socket qua biến ( `conn.recv()`, `recvfrom`, `recv_into` ) cũng được nhận ra ở mức medium:
+kết nối nội bộ giữa hai dịch vụ của chính mình không nhất thiết là không tin cậy, nên công cụ không
+dám khẳng định cứng như `flask.request`.
 
 ### CHỈ ĐỌC VÀ IN BÁO CÁO, KHÔNG LÀM GÌ KHÁC !
 
@@ -137,6 +152,7 @@ python -m fortress_scan .                        # quét thư mục hiện tại
 python -m fortress_scan ./src -v                 # kèm đường đi dữ liệu + cách khắc phục
 python -m fortress_scan . --min-severity high    # chỉ xem lỗi nặng
 python -m fortress_scan . -f markdown -o BAO-CAO.md
+python -m fortress_scan . --no-cross-file   # mỗi tệp Python tự quét, như 0.1
 ```
 
 Sau khi cài còn có hai lệnh ngắn `fortress-scan` và `fscan`. Nếu shell báo không tìm thấy lệnh
@@ -145,7 +161,7 @@ Sau khi cài còn có hai lệnh ngắn `fortress-scan` và `fscan`. Nếu shell
 Thử với bộ mẫu có sẵn:
 
 ```bash
-python -m fortress_scan tests/samples/vulnerable --no-config -v   # phải ra 19 lỗi critical
+python -m fortress_scan tests/samples/vulnerable --no-config -v   # phải ra 38 phát hiện, 20 critical
 python -m fortress_scan tests/samples/safe --no-config            # phải im lặng
 ```
 
@@ -241,7 +257,7 @@ Có hai bộ phân tích:
 | --- | --- | --- |
 | Cách đọc mã | dựng cây cú pháp đầy đủ (AST) | tách token bằng lexer riêng cho từng ngôn ngữ |
 | Theo dữ liệu | qua nhánh `if`, vòng lặp, `try`, và qua hàm khác cùng tệp | trong phạm vi một hàm |
-| Kết quả | sâu nhất, đủ 23/27 rule | bắt được dạng "nguồn -> biến -> sink" |
+| Kết quả | sâu nhất, đủ 27/31 rule, **theo được taint xuyên file** | bắt được dạng "nguồn -> biến -> sink" trong cùng một hàm |
 
 Rẽ nhánh thì hai nhánh được **gộp lại** ( nhiễm ở một nhánh là đủ để cảnh báo ), vòng lặp chỉ chạy vài
 vòng rồi dừng, và mỗi tệp có **ngân sách** số node/token nên một tệp dựng riêng để làm treo công cụ
@@ -281,7 +297,7 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 | Sink nằm trong bảng điều phối / danh sách - `handlers["run"](cmd)` | ✅ Vẫn bắt được |
 | Gọi qua `getattr` với tên hằng - `getattr(os, "system")(cmd)` | ✅ Vẫn bắt được |
 | Hàm bọc / tầng CSDL tự viết, **cùng tệp** | ✅ Tự học được, mức critical |
-| Hàm bọc / tầng CSDL tự viết, **khác tệp trong dự án** | ⚠️ Chỉ còn mức medium, và báo ở file wrapper chứ không phải chỗ gọi |
+| Hàm bọc / tầng CSDL tự viết, **khác tệp trong dự án** ( Python ) | ✅ Tự học được qua chỉ mục dự án, mức critical, báo tại chỗ gọi kèm đường đi xuyên file |
 | Framework hoặc helper lấy input tự viết mà công cụ chưa biết | ⚠️ Chỉ còn mức medium |
 | Wrapper nằm trong **thư viện ngoài** (cài qua pip) | ❌ Bỏ sót |
 
@@ -289,8 +305,9 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 
 ### Các giới hạn khác
 
-- **Chỉ phân tích trong phạm vi một tệp** - nguồn ở `a.py` chạy tới sink ở `b.py` qua `import` thì
-  chưa nối được.
+- **Python theo được taint xuyên file** ( từ 0.2 ): nguồn ở `a.py` chạy qua helper ở `b.py` rồi nổ
+  ở `c.py` vẫn được nối, với chặn trên 2000 tệp / 20000 hàm mỗi lượt quét ( vượt thì báo rõ và hạ
+  về từng tệp ). **Các ngôn ngữ quét theo token thì vẫn dừng ở ranh giới tệp.**
 - **Ngoài Python là phân tích theo token**, không phải parser đầy đủ - độ bao phủ thấp hơn, và giá
   trị "độ tin cậy" trong báo cáo phản ánh đúng điều đó.
 - **Không theo được dữ liệu lưu vào thuộc tính đối tượng**, và không phát hiện **injection bậc hai**
@@ -298,8 +315,9 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 - **Kiểu viết trên nhiều dòng hoặc có `;` bên trong kiểu dữ liệu thì chưa tách câu lệnh đúng** -
   ví dụ TypeScript `const o: {a: string; b: number} = nguon_ng` bị cắt câu ngay dấu `;`, nên chỉ
   còn cảnh báo mức medium.
-- **Chưa hỗ trợ:** CRLF/header injection, log injection, path traversal, SSRF, open redirect,
-  prototype pollution, ReDoS, lỗi logic nghiệp vụ.
+- **Chưa hỗ trợ:** log injection, prototype pollution, ReDoS, lỗi logic nghiệp vụ. PHP
+  `header()` được xếp vào họ CRLF/header; vị trí `response['X-Header'] = v` của Django ( không có
+  chữ `headers` ) chưa bắt được.
 - Sẽ có **báo nhầm** và **bỏ sót** - phân tích tĩnh vốn không đầy
   đủ. Công cụ **bổ sung** cho code review, quét phụ thuộc và kiểm thử động, **không thay thế** cái
   nào hết.
