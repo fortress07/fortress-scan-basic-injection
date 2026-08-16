@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fortress-scan-basic-injection"
-version = "0.1.0"
+version = "0.2.0"
 description = "Công cụ phân tích tĩnh phát hiện sớm các lỗ hổng injection trong mã nguồn."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -40,7 +40,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4"]
+dev = ["pytest>=7.4", "ruff>=0.5"]
 
 [project.scripts]
 fortress-scan = "fortress_scan.cli:main"
@@ -64,3 +64,8 @@ addopts = "-q"
 # `import fortress_scan` rơi vào bản `pip install -e` đang trỏ đi đâu đó,
 # và cả bộ test xanh mà không hề chạm vào thay đổi vừa viết.
 pythonpath = ["src"]
+
+[tool.ruff]
+# tests/samples là corpus lỗi CÓ Ý ĐỊNH ( Trojan Source, ký tự ẩn ) - ruff
+# sẽ báo invalid-syntax trên chính những thứ nó cần tồn tại.
+extend-exclude = ["tests/samples"]
