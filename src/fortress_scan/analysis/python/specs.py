@@ -196,6 +196,9 @@ SANITIZERS: Dict[str, FrozenSet[Category]] = {
     "urllib.parse.quote_plus": frozenset({Category.MARKUP}),
     "ldap.filter.escape_filter_chars": frozenset({Category.LDAP}),
     "ldap3.utils.conv.escape_filter_chars": frozenset({Category.LDAP}),
+    "os.path.basename": frozenset({Category.PATH}),
+    "werkzeug.utils.secure_filename": frozenset({Category.PATH}),
+    "secure_filename": frozenset({Category.PATH}),
 }
 
 TRUSTED_PRODUCERS: FrozenSet[str] = frozenset(
@@ -762,6 +765,159 @@ _SINK_LIST: Tuple[SinkSpec, ...] = (
         "XMLParser của lxml",
         (),
         condition=XML_PARSER,
+    ),
+    # Bốn họ sink mới của 0.2. Chỉ có biến thể tainted: các biến thể "biểu
+    # thức không hằng" ( dynamic_rule ) ở đây sẽ bắn vào gần như mọi lời gọi
+    # open() hợp lệ của mọi dự án.
+    SinkSpec("open", Category.PATH, "FSB-PATH-001", None, "open()", condition=TAINT_ONLY),
+    SinkSpec("io.open", Category.PATH, "FSB-PATH-001", None, "open()", condition=TAINT_ONLY),
+    SinkSpec(
+        "flask.send_file",
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        "send_file()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "flask.send_from_directory",
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        "send_from_directory()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "werkzeug.utils.send_file",
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        "send_file()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "shutil.copy",
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        "shutil.copy()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "shutil.copyfile",
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        "shutil.copyfile()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "requests.get", Category.SSRF, "FSB-SSRF-001", None, "requests.get()", condition=TAINT_ONLY
+    ),
+    SinkSpec(
+        "requests.post",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "requests.post()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "requests.put", Category.SSRF, "FSB-SSRF-001", None, "requests.put()", condition=TAINT_ONLY
+    ),
+    SinkSpec(
+        "requests.patch",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "requests.patch()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "requests.delete",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "requests.delete()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "requests.head",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "requests.head()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "requests.request",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "requests.request()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "urllib.request.urlopen",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "urlopen()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "urllib.request.Request",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "urllib.request.Request()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "httpx.get", Category.SSRF, "FSB-SSRF-001", None, "httpx.get()", condition=TAINT_ONLY
+    ),
+    SinkSpec(
+        "httpx.post", Category.SSRF, "FSB-SSRF-001", None, "httpx.post()", condition=TAINT_ONLY
+    ),
+    SinkSpec(
+        "httpx.request",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "httpx.request()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "socket.create_connection",
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "socket.create_connection()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "flask.redirect",
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        "redirect()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "werkzeug.utils.redirect",
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        "redirect()",
+        condition=TAINT_ONLY,
+    ),
+    SinkSpec(
+        "django.shortcuts.redirect",
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        "redirect()",
+        condition=TAINT_ONLY,
     ),
 )
 

@@ -68,6 +68,14 @@ TRIGGERS: Dict[str, Tuple[str, str]] = {
         PYTHON,
         "def tinh(bieu_thuc):\n    return eval(bieu_thuc)\n",
     ),
+    "FSB-HDR-001": (
+        PYTHON,
+        "from flask import make_response, request\n"
+        "def h():\n"
+        "    resp = make_response('ok')\n"
+        "    resp.headers['X-Trace'] = request.args.get('t')\n"
+        "    return resp\n",
+    ),
     "FSB-IMPORT-001": (
         PYTHON,
         "import importlib\nfrom flask import request\n"
@@ -88,6 +96,16 @@ TRIGGERS: Dict[str, Tuple[str, str]] = {
         "from flask import request\n"
         "def h(col):\n    return col.find({'$where': request.args.get('f')})\n",
     ),
+    "FSB-PATH-001": (
+        PYTHON,
+        "from flask import request\n"
+        "def tai():\n    return open('/data/' + request.args.get('f')).read()\n",
+    ),
+    "FSB-REDIR-001": (
+        PYTHON,
+        "from flask import redirect, request\n"
+        "def chuyen():\n    return redirect(request.args.get('next'))\n",
+    ),
     "FSB-REFL-001": (
         PYTHON,
         "from flask import request\n"
@@ -102,6 +120,11 @@ TRIGGERS: Dict[str, Tuple[str, str]] = {
     "FSB-SQL-002": (
         PYTHON,
         "def tim(cursor, ma):\n    cursor.execute('SELECT * FROM users WHERE id = ' + ma)\n",
+    ),
+    "FSB-SSRF-001": (
+        PYTHON,
+        "import requests\nfrom flask import request\n"
+        "def lay():\n    return requests.get(request.args.get('url')).text\n",
     ),
     "FSB-SUP-001": (
         MANIFEST,
@@ -201,6 +224,17 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
         PYTHON,
         "def tinh():\n    return eval('1 + 1')\n",
     ),
+    "FSB-HDR-001": (
+        PYTHON,
+        "import re\nfrom flask import make_response, request\n"
+        "def h():\n"
+        "    token = request.args.get('t')\n"
+        "    if re.fullmatch(r'[A-Za-z0-9]+', token):\n"
+        "        resp = make_response('ok')\n"
+        "        resp.headers['X-Trace'] = token\n"
+        "        return resp\n"
+        "    return 'sai dinh dang', 400\n",
+    ),
     "FSB-IMPORT-001": (
         PYTHON,
         "import importlib\nfrom flask import request\n"
@@ -223,6 +257,23 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
         "from flask import request\n"
         "def h(col):\n    return col.find({'ten': str(request.args.get('f'))})\n",
     ),
+    "FSB-PATH-001": (
+        PYTHON,
+        "import os\nfrom flask import request\n"
+        "def tai():\n"
+        "    ten = os.path.basename(request.args.get('f'))\n"
+        "    return open(os.path.join('/data', ten)).read()\n",
+    ),
+    "FSB-REDIR-001": (
+        PYTHON,
+        "from flask import redirect, request\n"
+        "DUONG_DAN_CHO_PHEP = {'/home', '/about'}\n"
+        "def chuyen():\n"
+        "    den = request.args.get('next')\n"
+        "    if den in DUONG_DAN_CHO_PHEP:\n"
+        "        return redirect(den)\n"
+        "    return redirect('/home')\n",
+    ),
     "FSB-REFL-001": (
         PYTHON,
         "from flask import request\n"
@@ -243,6 +294,16 @@ SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
         PYTHON,
         "def tim(cursor, ma):\n"
         "    cursor.execute('SELECT * FROM users WHERE id = ?', (ma,))\n",
+    ),
+    "FSB-SSRF-001": (
+        PYTHON,
+        "import requests\nfrom flask import request\nfrom urllib.parse import urlparse\n"
+        "MIEN_CHO_PHEP = {'example.com', 'api.example.com'}\n"
+        "def lay():\n"
+        "    host = urlparse(request.args.get('url')).hostname\n"
+        "    if host in MIEN_CHO_PHEP:\n"
+        "        return requests.get('https://' + host).text\n"
+        "    raise ValueError('mien khong hop le')\n",
     ),
     "FSB-SUP-001": (
         MANIFEST,

@@ -46,6 +46,10 @@ class Category(str, Enum):
     XML = "xml"
     UNICODE = "unicode"
     SUPPLY_CHAIN = "supply-chain"
+    PATH = "path"
+    SSRF = "ssrf"
+    REDIRECT = "redirect"
+    HTTP_HEADER = "http-header"
 
 
 class StepKind(str, Enum):
