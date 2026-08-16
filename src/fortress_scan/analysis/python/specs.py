@@ -1040,28 +1040,55 @@ XML_UNSAFE_KEYWORDS: Dict[str, bool] = {
     "huge_tree": True,
 }
 
+# Mọi nhánh ở đây đều có khoảng trống BỊ CHẶN ( \w+, \s+ giữa hai từ khóa cố
+# định ), nên thời gian quét tuyến tính theo độ dài - kể cả trên payload thù
+# địch. Nhánh `select ... from` KHÔNG nằm ở đây: xem _SELECT_OR_FROM.
 SQL_STATEMENT = re.compile(
-    r"(?is)\b(?:select\s+.+?\bfrom\b|insert\s+into\b|update\s+\w+\s+set\b|delete\s+from\b|"
+    r"(?is)\b(?:insert\s+into\b|update\s+\w+\s+set\b|delete\s+from\b|"
     r"create\s+(?:table|view|index)\b|drop\s+(?:table|view|database)\b|alter\s+table\b|"
     r"union\s+(?:all\s+)?select\b|truncate\s+table\b|merge\s+into\b|with\s+\w+\s+as\s*\()"
 )
 
-# Nhánh `select\s+.+?\bfrom\b` là lazy dot-star: trên một chuỗi vài MB chứa
-# "select" mà không có "from", nó quét lại cả chuỗi tại MỖI vị trí select -
-# đo thực tế trên 2 MB là không bao giờ quay lại. Budget của engine chỉ đếm
-# node/token, không đếm thời gian regex, nên cần hai lớp riêng: cửa sổ giới
-# hạn chặn độ lớn một lần chạy, và spend() tính chi phí vào ngân sách để chặn
-# cả số lần chạy trên một tệp dày đặc payload.
-SQL_HINT_WINDOW = 256
+# `select\s+.+?\bfrom\b` là lazy dot-star: trên chuỗi vài MB chứa "select" mà
+# không có "from", nó quét lại phần đuôi tại MỖI vị trí select - bậc hai, đo
+# thực tế trên 2 MB là không bao giờ quay lại. Budget của engine chỉ đếm
+# node/token nên không chặn được.
+#
+# Cắt cụt đầu vào thì hết treo nhưng SINH ÂM TÍNH GIẢ: một câu SELECT liệt kê
+# 40 cột đã dài hơn 600 ký tự trước khi tới FROM, và với sink require_sql của
+# bộ phân tích generic ( Java queryForObject, Go db.Query... ) không nhận ra
+# SQL nghĩa là BỎ HẲN phát hiện. Với một công cụ SAST, bỏ sót lỗ hổng đắt hơn
+# quét chậm.
+#
+# Nên thay vì cắt: quét MỘT LƯỢT các từ khóa như token. Alternation của hai
+# chuỗi cố định không có gì để quay lui, nên độ phức tạp tuyến tính thật sự -
+# 2 MB payload thù địch đo được ~0.25s thay vì không bao giờ xong, mà câu
+# SELECT dài bao nhiêu cũng vẫn nhận đúng.
+_SELECT_OR_FROM = re.compile(r"(?i)\b(select|from)\b")
+
+# Chặn trên cho MỘT lần gọi. Tuyến tính rồi thì đây chỉ là lưới an toàn cuối
+# ( ~1ms ở mức này ), và đủ rộng để không câu SQL thật nào chạm tới.
+SQL_HINT_WINDOW = 8192
 
 
-def looks_like_sql(
-    text: str, spend: Optional[Callable[[int], None]] = None
-) -> bool:
+def _has_select_from(text: str) -> bool:
+    """Có `select` đứng trước `from` không - một lượt quét, không quay lui."""
+    seen_select = False
+    for match in _SELECT_OR_FROM.finditer(text):
+        if match.group(1)[0] in "sS":
+            seen_select = True
+        elif seen_select:
+            return True
+    return False
+
+
+def looks_like_sql(text: str, spend: Optional[Callable[[int], None]] = None) -> bool:
     window = text[:SQL_HINT_WINDOW]
     if spend is not None:
-        spend(2 + len(window))
-    return bool(SQL_STATEMENT.search(window))
+        # Chi phí tuyến tính theo độ dài đã quét: chặn số LẦN gọi trên một tệp
+        # dày đặc payload, phần bù cho chặn trên độ lớn của SQL_HINT_WINDOW.
+        spend(2 + len(window) // 8)
+    return bool(SQL_STATEMENT.search(window)) or _has_select_from(window)
 
 
 SHELL_METACHARACTERS = re.compile(r"[;&|`$><\n]|\|\||&&|\$\(")

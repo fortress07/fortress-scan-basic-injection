@@ -10,6 +10,14 @@ MAX_TEXT_PARTS = 24
 MAX_CALLABLE_REFS = 8
 MAX_ENTRIES = 32
 
+# Chặn trên cho phần văn bản giữ lại của MỘT hằng chuỗi. Con số này phải đủ
+# rộng cho những phép nhận dạng chạy trên `Value.text` - đáng kể nhất là
+# looks_like_sql(), vốn cần nhìn thấy `from` đứng sau `select`. Ở mức 512 cũ
+# hai hạn mức đá nhau âm thầm: một câu SELECT liệt kê 40 cột dài hơn 800 ký
+# tự bị cắt mất `from`, nên sink SQL với receiver lạ không còn được nhận ra
+# dù cửa sổ của chính looks_like_sql() rộng hơn nhiều.
+MAX_LITERAL_TEXT = 4096
+
 
 @dataclass(frozen=True)
 class CallableRef:
@@ -170,7 +178,7 @@ CONSTANT = Value(constant=True)
 
 
 def literal(text: str) -> Value:
-    return Value(constant=True, text_parts=(text[:512],))
+    return Value(constant=True, text_parts=(text[:MAX_LITERAL_TEXT],))
 
 
 def combine(*values: Value) -> Value:

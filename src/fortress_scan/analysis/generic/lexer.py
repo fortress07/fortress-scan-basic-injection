@@ -82,7 +82,12 @@ class Tokenizer:
         self._length = len(source)
         self._index = 0
         self._line = 1
-        self._column = 1
+        # Cột đếm từ 0, ĐÚNG như ast.col_offset của bộ phân tích Python. Cả
+        # đường ra phía sau ( console, JSON, SARIF startColumn = column + 1 )
+        # đều giả định 0-based; đếm từ 1 ở đây khiến MỌI phát hiện của mọi ngôn
+        # ngữ dùng lexer này lệch một cột, và trên GitHub code scanning là tô
+        # sai một ký tự so với lời gọi thật.
+        self._column = 0
         self._tokens: List[Token] = []
 
     def run(self) -> List[Token]:
@@ -93,7 +98,7 @@ class Tokenizer:
                 self._emit(NEWLINE, "\n")
                 self._advance(1)
                 self._line += 1
-                self._column = 1
+                self._column = 0
                 continue
             if char in " \t\r\f\v":
                 self._advance(1)
@@ -129,6 +134,22 @@ class Tokenizer:
         self._index += count
         self._column += count
 
+    def _advance_over(self, segment: str) -> None:
+        """Đi hết một đoạn đã đọc nguyên khối ( chuỗi, heredoc, chú thích khối ).
+
+        Các đoạn này trước đây đặt thẳng column về đầu dòng. Đúng khi đoạn có
+        xuống dòng, nhưng SAI hẳn khi nó nằm gọn trong một dòng: sau
+        `$log = "prefix"; system($x)` thì `system` bị báo ở cột 2 thay vì 17 -
+        mọi token đứng sau một chuỗi trên cùng dòng đều lệch, và đó là hình
+        dạng phổ biến nhất của mã thật.
+        """
+        newlines = segment.count("\n")
+        if newlines:
+            self._line += newlines
+            self._column = len(segment) - segment.rfind("\n") - 1
+        else:
+            self._column += len(segment)
+
     def _skip_comment(self) -> bool:
         for marker in self._profile.line_comments:
             if self._source.startswith(marker, self._index):
@@ -143,9 +164,8 @@ class Tokenizer:
                 end = self._source.find(closer, self._index + len(opener))
                 segment_end = self._length if end == -1 else end + len(closer)
                 segment = self._source[self._index : segment_end]
-                self._line += segment.count("\n")
                 self._index = segment_end
-                self._column = 1
+                self._advance_over(segment)
                 return True
         return False
 
@@ -180,9 +200,8 @@ class Tokenizer:
             self._emit(STRING, body, in_string=False)
             if quote != "'":
                 self._scan_interpolations(body)
-            self._line += segment.count("\n")
             self._index = terminator
-            self._column = 1
+            self._advance_over(segment)
             return True
         return False
 
@@ -234,9 +253,8 @@ class Tokenizer:
         self._emit(STRING, body, quote=char)
         if interpolating and not raw:
             self._scan_interpolations(body)
-        self._line += segment.count("\n")
         self._index = cursor
-        self._column = 1
+        self._advance_over(segment)
         return True
 
     def _skip_quoted(self, index: int) -> int:

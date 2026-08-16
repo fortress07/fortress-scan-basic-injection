@@ -1474,9 +1474,9 @@ class TestRedosInOwnRegexes:
         assert elapsed < 5.0, "lượt quét phải kết thúc nhanh, mất %.2fs" % elapsed
 
     def test_real_sql_statement_is_still_recognized(self):
-        """Receiver không có hint (svc, không phải cursor) thì cửa sổ hint
-        regex là thứ duy nhất quyết định - SQL thật dưới 256 ký tự phải vẫn
-        được nhận ra sau khi thêm cửa sổ giới hạn."""
+        """Receiver không có hint (svc, không phải cursor) thì phép nhận dạng
+        SQL là thứ duy nhất quyết định - SQL thật phải vẫn được nhận ra sau
+        khi chặn ReDoS."""
         source = (
             "def f(svc, cond):\n"
             "    sql = 'select id, name, email from users where active = 1"
@@ -1485,6 +1485,52 @@ class TestRedosInOwnRegexes:
         )
         ids = rule_ids(source)
         assert "FSB-SQL-002" in ids
+
+    def test_wide_column_list_before_from_is_still_sql(self):
+        """Cắt cụt đầu vào để chặn ReDoS từng sinh âm tính giả.
+
+        Một câu SELECT liệt kê 40 cột đã vượt 600 ký tự trước khi tới FROM -
+        hình dạng rất thường gặp trong mã doanh nghiệp. Với cửa sổ 256 ký tự
+        thì phần `from` nằm ngoài tầm nhìn và phát hiện biến mất hoàn toàn.
+        """
+        columns = ", ".join("customer_column_%02d" % index for index in range(40))
+        statement = "select %s from users where id = " % columns
+        assert len(statement) > 600
+        source = "def f(svc, cond):\n    svc.execute('%s' + cond)\n" % statement
+        assert "FSB-SQL-002" in rule_ids(source)
+
+    def test_wide_select_still_reported_in_token_languages(self, tmp_path: Path):
+        """Sink require_sql của bộ phân tích generic BỎ HẲN phát hiện khi
+        không nhận ra SQL, nên ở đây âm tính giả là mất trắng một lỗ hổng."""
+        columns = ", ".join("order_column_%02d" % index for index in range(40))
+        statement = "SELECT %s FROM orders WHERE id = " % columns
+        (tmp_path / "Dao.java").write_text(
+            "public class Dao {\n"
+            "  public Object find(String userId) {\n"
+            '    return jdbc.queryForObject("%s" + userId, Order.class);\n'
+            "  }\n}\n" % statement,
+            encoding="utf-8",
+        )
+        (tmp_path / "store.go").write_text(
+            "package main\n"
+            "func find(db *sql.DB, userId string) {\n"
+            '  db.Query("%s" + userId)\n'
+            "}\n" % statement,
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        reported = {finding.path for finding in result.findings}
+        assert "Dao.java" in reported
+        assert "store.go" in reported
+
+    def test_select_without_from_across_megabytes_stays_linear(self):
+        """Chính là dạng làm regex lazy dot-star chạy mãi không quay lại."""
+        from fortress_scan.analysis.python.specs import looks_like_sql
+
+        payload = ("select " * 300_000)[:2_000_000]
+        start = time.monotonic()
+        assert looks_like_sql(payload) is False
+        assert time.monotonic() - start < 1.0
 
 
 class TestCodecBombs:
