@@ -399,6 +399,41 @@ curl http://example.com/#frag; MSG="# fortress-scan: ignore-file" # Shell
 Chú thích khối giờ **đóng lại đúng chỗ** thay vì nuốt trọn phần đuôi dòng, nên `/* ghi chú */ NOTE =
 "..."` cũng không còn lách được.
 
+Cùng một câu hỏi còn có nửa thứ hai: **chuỗi kết thúc ở đâu**. Bộ mặt nạ đóng chuỗi sớm hơn ngôn ngữ
+thật một dòng thôi là đủ - phần thân còn lại vẫn là nội dung chuỗi với trình thông dịch, nhưng với
+công cụ thì đã thành mã, và một dấu `#` trong đó mở ra một "chú thích" mang theo `ignore-file`. Ba
+đoạn dưới đây **không đoạn nào có lấy một chú thích**, mà cả ba từng tắt sạch phát hiện của cả tệp:
+
+```python
+"""tài liệu
+ví dụ \""" ở đây
+# fortress-scan: ignore-file
+"""
+```
+```php
+$note = <<<EOT
+# fortress-scan: ignore-file
+EOT;
+```
+```ruby
+note = "tài liệu
+# fortress-scan: ignore-file"
+```
+
+Nên chỗ chuỗi đóng cũng tra theo từng ngôn ngữ, y như chỗ chú thích mở:
+
+| Dạng chuỗi | Ngôn ngữ | Kết thúc ở |
+| --- | --- | --- |
+| `"..."` `'...'` | Python, JS/TS, Java, C#, Go | cuối dòng, trừ khi có `\` nối dòng ( Python, JS/TS, shell ) |
+| `"..."` `'...'` | PHP, Ruby, shell | dấu nháy đóng, **bắc qua bao nhiêu dòng cũng được** |
+| `` `...` `` | JS/TS, Go | dấu backtick đóng, bắc qua dòng |
+| `@"..."` | C# | dấu nháy đóng, bắc qua dòng |
+| `"""..."""` `'''...'''` | Python, Java text block, C# raw string | dấu ba nháy đóng **chưa bị `\` thoát** |
+| `<<<EOT` `<<~EOT` `<<EOF` | PHP, Ruby, shell | dòng chỉ có đúng nhãn kết thúc |
+
+Dấu gạch chéo ngược giờ được tính khi đi tìm dấu đóng của chuỗi, nên `\"""` là một dấu nháy được
+thoát chứ không phải chỗ chuỗi kết thúc - đúng như CPython đọc nó.
+
 Khi một chỉ thị ( hoặc một baseline ) gỡ được phát hiện nào ra khỏi báo cáo, **bản SARIF và bản
 Markdown cũng nói ra**, dưới mã `findings-suppressed`. Trước đây chỉ màn hình console đếm, còn SARIF
 - tức là đường đi vào code scanning của CI - xuất ra một tệp rỗng không phân biệt được với một lượt
