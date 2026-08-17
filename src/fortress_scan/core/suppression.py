@@ -140,14 +140,102 @@ _BLOCK_COMMENTS: Dict[str, Tuple[Tuple[str, str], ...]] = {
 _DEFAULT_LINE_COMMENTS: Tuple[str, ...] = ("//", "#")
 _DEFAULT_BLOCK_COMMENTS: Tuple[Tuple[str, str], ...] = (_C_COMMENT,)
 
+# Dấu nháy nào giữ chuỗi MỞ khi hết dòng -- tra theo từng ngôn ngữ, vì đây là
+# chỗ mỗi ngôn ngữ một luật. Một danh sách gộp chung ( "chỉ backtick mới bắc
+# qua dòng" ) là một đường lách thật, cùng họ với danh sách dấu mở chú thích
+# gộp chung ở trên.
+#
+# Bộ mặt nạ đóng chuỗi ở cuối dòng, nên dòng KẾ TIẾP -- vẫn nằm trong chuỗi
+# theo cách ngôn ngữ thật đọc nó -- được đem ra đọc như mã. Ở đó một dấu `#`
+# hay `//` mở ra một "chú thích", và cả tệp tắt tiếng:
+#     $note = "tài liệu
+#     # fortress-scan: ignore-file";
+# Không dòng nào ở trên là chú thích: với PHP đó là một chuỗi hai dòng.
+#
+# Chuỗi "..." và '...' của PHP, Ruby và shell bắc qua dòng mà không cần dấu gì
+# thêm. C# thì có chuỗi nguyên văn `@"..."`; ở đây không cần nhận ra tiền tố
+# `@`, vì một chuỗi C# bình thường luôn đóng ngay trong dòng của nó -- cờ này
+# chỉ có tác dụng đúng lúc chuỗi còn mở khi hết dòng.
+_SPANNING_QUOTES: Dict[str, FrozenSet[str]] = {
+    PYTHON: frozenset(),
+    JAVASCRIPT: frozenset("`"),
+    TYPESCRIPT: frozenset("`"),
+    PHP: frozenset("\"'"),
+    JAVA: frozenset(),
+    RUBY: frozenset("\"'"),
+    GO: frozenset("`"),
+    CSHARP: frozenset('"'),
+    SHELL: frozenset("\"'"),
+    MANIFEST: frozenset(),
+}
+_DEFAULT_SPANNING_QUOTES: FrozenSet[str] = frozenset("`")
+
+# Ngôn ngữ mà một dấu gạch chéo ngược ở cuối dòng nuốt luôn ký tự xuống dòng
+# và giữ chuỗi mở sang dòng sau. Cùng một đường lách với bảng trên, chỉ tốn
+# thêm đúng một ký tự:
+#     NOTE = "tài liệu \
+#     # fortress-scan: ignore-file"
+# CPython đọc cả hai dòng thành một chuỗi duy nhất.
+_LINE_CONTINUATION: FrozenSet[str] = frozenset(
+    {PYTHON, JAVASCRIPT, TYPESCRIPT, SHELL}
+)
+
+# Heredoc: dạng chuỗi nhiều dòng thứ ba, và là dạng tự nhiên nhất để viết một
+# đoạn văn bản dài trong PHP, Ruby hay shell. Không mô tả nó thì toàn bộ thân
+# heredoc được đọc như mã, nên
+#     $note = <<<EOT
+#     # fortress-scan: ignore-file
+#     EOT;
+# lại tắt cả tệp.
+#
+# Nhãn có thể đặt trong nháy ( nowdoc của PHP, `<<~'EOT'` của Ruby, `<<'EOF'`
+# của shell ). Riêng Ruby, `<<` trần còn là toán tử dịch trái và phép nối mảng,
+# nên nhánh không có `-`/`~` chỉ nhận nhãn viết hoa -- đúng quy ước heredoc và
+# đủ để `arr << item` không bị hiểu nhầm.
+_HEREDOC_LABEL = r"[A-Za-z_][A-Za-z0-9_]*"
+
+# Ba cách viết nhãn heredoc: "EOT", 'EOT' ( nowdoc, không nội suy ) và EOT trần.
+_HEREDOC_NAME = r"(?:\"(?P<dq>%s)\"|'(?P<sq>%s)'|\\?(?P<bare>%s))" % (
+    _HEREDOC_LABEL,
+    _HEREDOC_LABEL,
+    _HEREDOC_LABEL,
+)
+
+_HEREDOC_OPENERS: Dict[str, "re.Pattern[str]"] = {
+    PHP: re.compile(r"<<<[ \t]*" + _HEREDOC_NAME),
+    # Nhánh có `-`/`~` nhận nhãn bất kỳ. Nhánh `<<` trần chỉ nhận nhãn viết
+    # hoa, vì ở Ruby `<<` còn là toán tử dịch trái và phép nối mảng --
+    # `arr << item` không được biến thành một heredoc nuốt trọn phần đuôi tệp.
+    RUBY: re.compile(
+        r"<<(?P<squiggly>[-~])[ \t]*" + _HEREDOC_NAME
+        + r"|<<(?P<upper>[A-Z_][A-Za-z0-9_]*)"
+    ),
+    SHELL: re.compile(r"<<(?!<)(?P<dash>-)?[ \t]*" + _HEREDOC_NAME),
+}
+
+# `<<-` ( shell, Ruby ) và `<<~` ( Ruby ) cho phép thụt lề dòng kết thúc; PHP
+# 7.3 trở đi cũng vậy. Nhận dư một dòng kết thúc là đóng heredoc SỚM hơn thật,
+# tức là phơi phần đuôi ra làm mã -- nên chỉ bật cờ này đúng ở nơi ngôn ngữ
+# thật sự cho phép.
+_HEREDOC_INDENT_GROUPS: Tuple[str, ...] = ("squiggly", "dash")
+_HEREDOC_INDENTED_ALWAYS: FrozenSet[str] = frozenset({PHP})
+
+_HEREDOC_LABEL_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+)
+
 
 @dataclass(frozen=True)
 class _CommentSyntax:
-    """Dấu mở chú thích của một ngôn ngữ, đã sắp dài trước ngắn."""
+    """Cú pháp chú thích và chuỗi của một ngôn ngữ, đã sắp dài trước ngắn."""
 
     line: Tuple[str, ...]
     block: Tuple[Tuple[str, str], ...]
     word_start_only: bool = False
+    spanning: FrozenSet[str] = _DEFAULT_SPANNING_QUOTES
+    continuation: bool = True
+    heredoc: Optional["re.Pattern[str]"] = None
+    heredoc_indented: bool = False
 
 
 def comment_syntax(language: Optional[str]) -> _CommentSyntax:
@@ -157,13 +245,20 @@ def comment_syntax(language: Optional[str]) -> _CommentSyntax:
         _LINE_COMMENTS.get(language, _DEFAULT_LINE_COMMENTS),
         _BLOCK_COMMENTS.get(language, _DEFAULT_BLOCK_COMMENTS),
         language in _WORD_START_LINE_COMMENTS,
+        _SPANNING_QUOTES.get(language, _DEFAULT_SPANNING_QUOTES),
+        language in _LINE_CONTINUATION,
+        _HEREDOC_OPENERS.get(language),
+        language in _HEREDOC_INDENTED_ALWAYS,
     )
 
 
+# Ba nháy giữ nguyên danh sách chung: Python có `"""`/`'''`, Java có text
+# block và C# 11 có raw string literal, đều viết bằng ba nháy. Ở những ngôn
+# ngữ còn lại `"""` là chuỗi rỗng rồi tới một dấu nháy mở, và coi nó là một
+# vùng ba nháy chỉ khiến bộ mặt nạ xoá RỘNG hơn -- tức là về phía không giấu
+# chỉ thị nào, đúng hướng an toàn.
 _TRIPLE_QUOTES: Tuple[str, ...] = ('"""', "'''")
 _LINE_QUOTES: Tuple[str, ...] = ('"', "'", "`")
-# Chuỗi một nháy không bắc qua dòng; chỉ ba nháy và backtick mới bắc được.
-_SPANNING_QUOTES: Tuple[str, ...] = ("`",)
 # Vùng nội suy bên trong chuỗi là mã, nên nó được phép chứa một chuỗi lồng
 # dùng đúng dấu nháy đang mở -- `outer ${`inner`} end` là JavaScript hợp lệ.
 # Không nhảy qua trọn vùng này thì dấu nháy mở của chuỗi lồng bị hiểu nhầm là
@@ -230,33 +325,76 @@ def _scan_to_closer(
     return -1
 
 
-Pending = Tuple[str, bool]
+@dataclass(frozen=True)
+class _Region:
+    """Một vùng đang mở và bắc qua cuối dòng."""
+
+    closer: str
+    keep: bool
+    heredoc: bool = False
+    indented: bool = False
+
+
+Pending = _Region
+
+
+def _find_string_end(raw: str, index: int, delimiter: str, budget: _MaskBudget) -> int:
+    """Vị trí dấu đóng THẬT của một vùng chuỗi, tôn trọng dấu thoát.
+
+    `str.find` trần là một đường lách. Trong chuỗi ba nháy của Python, một dấu
+    nháy đứng sau gạch chéo ngược là dấu nháy được THOÁT chứ không phải dấu
+    đóng: mở một docstring, cho dòng thứ hai chứa gạch chéo ngược rồi ba nháy,
+    thì với CPython chuỗi vẫn còn đang mở và dòng thứ ba vẫn là nội dung của
+    nó. Bộ mặt nạ thì đóng chuỗi ngay ở dòng thứ hai rồi đọc dòng thứ ba như
+    mã -- nên một dòng `# fortress-scan: ignore-file` nằm gọn trong docstring
+    tắt sạch phát hiện của cả tệp. Xem tests/test_suppression_string_desync.py.
+
+    Dấu gạch chéo ngược ở cuối dòng nuốt luôn ký tự xuống dòng, nên `cursor`
+    vượt quá độ dài và vùng được giữ mở sang dòng sau -- đúng như ngôn ngữ đọc.
+    """
+    cursor = index
+    length = len(raw)
+    while cursor < length:
+        budget.spend()
+        if raw[cursor] == "\\":
+            cursor += 2
+            continue
+        if raw.startswith(delimiter, cursor):
+            return cursor
+        cursor += 1
+    return -1
 
 
 def _close_region(
-    raw: str, index: int, delimiter: str, keep: bool
+    raw: str, index: int, region: _Region, budget: _MaskBudget
 ) -> Tuple[str, int, Optional[Pending]]:
     """Đọc tới dấu đóng của một vùng đang mở, bắc qua dòng nếu cần.
 
     `keep` phân biệt hai loại vùng. Thân chuỗi bị xoá trắng vì chỉ thị nằm
-    trong đó là dữ liệu. Thân chú thích khối được giữ nguyên vì chỉ thị nằm
-    trong đó là chú thích thật.
+    trong đó là dữ liệu, và trong đó `\\` là dấu thoát. Thân chú thích khối
+    được giữ nguyên vì chỉ thị nằm trong đó là chú thích thật, và ở đó `\\`
+    không có nghĩa gì cả -- nên chỉ vùng chuỗi mới đi qua _find_string_end.
     """
-    end = raw.find(delimiter, index)
+    delimiter = region.closer
+    if region.keep:
+        end = raw.find(delimiter, index)
+    else:
+        end = _find_string_end(raw, index, delimiter, budget)
     if end < 0:
-        body = raw[index:] if keep else " " * (len(raw) - index)
-        return body, len(raw), (delimiter, keep)
-    body = raw[index:end] if keep else " " * (end - index)
+        body = raw[index:] if region.keep else " " * (len(raw) - index)
+        return body, len(raw), region
+    body = raw[index:end] if region.keep else " " * (end - index)
     return body + delimiter, end + len(delimiter), None
 
 
 def _consume_quoted(
-    raw: str, index: int, quote: str, budget: _MaskBudget
-) -> Tuple[str, int, Optional[str]]:
+    raw: str, index: int, quote: str, budget: _MaskBudget, syntax: _CommentSyntax
+) -> Tuple[str, int, Optional[Pending]]:
     """Xoá thân một chuỗi một nháy, tôn trọng dấu thoát."""
     pieces = [quote]
     index += 1
     length = len(raw)
+    continued = False
     while index < length:
         char = raw[index]
         if char == "\\":
@@ -265,6 +403,10 @@ def _consume_quoted(
             if index < length:
                 pieces.append(" ")
                 index += 1
+            else:
+                # Gạch chéo ngược cuối dòng nuốt luôn ký tự xuống dòng: ở
+                # những ngôn ngữ có luật này, chuỗi còn mở sang dòng sau.
+                continued = True
             continue
         end = _interpolation_end(raw, index, budget)
         if end != -1:
@@ -278,7 +420,13 @@ def _consume_quoted(
             return "".join(pieces), index + 1, None
         pieces.append(" ")
         index += 1
-    return "".join(pieces), length, quote if quote in _SPANNING_QUOTES else None
+    if quote in syntax.spanning or (continued and syntax.continuation):
+        # Vùng còn mở. Trả về đúng dạng Pending mà _mask_line chờ đợi: chỗ này
+        # từng trả về một chuỗi một ký tự, nên `delimiter, keep = pending` ở
+        # dòng sau ném ValueError và giết cả lượt quét -- một tệp .js có một
+        # dấu backtick lẻ là đủ để không tệp nào trong cây được báo cáo.
+        return "".join(pieces), length, _Region(quote, False)
+    return "".join(pieces), length, None
 
 
 def _starts_block_comment(
@@ -298,23 +446,71 @@ def _starts_line_comment(raw: str, index: int, syntax: _CommentSyntax) -> bool:
     return index == 0 or raw[index - 1].isspace()
 
 
+def _opens_heredoc(raw: str, index: int, syntax: _CommentSyntax) -> Optional[_Region]:
+    """Nhãn heredoc mở ra tại đúng vị trí này, nếu có."""
+    if syntax.heredoc is None or raw[index] != "<":
+        return None
+    match = syntax.heredoc.match(raw, index)
+    if match is None:
+        return None
+    groups = match.groupdict()
+    label = next(
+        (
+            value
+            for name, value in groups.items()
+            if value is not None and name not in _HEREDOC_INDENT_GROUPS
+        ),
+        None,
+    )
+    if label is None:
+        return None
+    indented = syntax.heredoc_indented or any(
+        groups.get(name) for name in _HEREDOC_INDENT_GROUPS
+    )
+    return _Region(label, keep=False, heredoc=True, indented=indented)
+
+
+def _closes_heredoc(raw: str, region: _Region) -> bool:
+    """Dòng này có đúng là dòng kết thúc heredoc không.
+
+    Nhận dư một dòng kết thúc là đóng heredoc sớm hơn ngôn ngữ thật, tức là
+    phơi phần thân còn lại ra làm mã -- nên nhãn phải đứng trọn vẹn, không
+    được chỉ là tiền tố của một từ dài hơn ( `EOT` không đóng `EOTHER` ).
+    """
+    text = raw.lstrip() if region.indented else raw
+    if not text.startswith(region.closer):
+        return False
+    rest = text[len(region.closer) :]
+    return not rest[:1] or rest[0] not in _HEREDOC_LABEL_CHARS
+
+
 def _mask_line(
     raw: str, pending: Optional[Pending], budget: _MaskBudget, syntax: _CommentSyntax
 ) -> Tuple[str, Optional[Pending]]:
     pieces: List[str] = []
     index = 0
     length = len(raw)
+    # Thân heredoc là dữ liệu trọn dòng: không có mã nào nằm cùng dòng với nó,
+    # nên nó được xử lý trước vòng lặp thay vì bên trong.
+    if pending is not None and pending.heredoc:
+        if not _closes_heredoc(raw, pending):
+            return " " * length, pending
+        pending = None
+    # Heredoc mở ra ở dòng NÀY nhưng thân của nó bắt đầu ở dòng SAU, nên nó
+    # được giữ riêng: gán thẳng vào `pending` sẽ nuốt luôn phần đuôi dòng này.
+    opened: Optional[_Region] = None
     while index < length:
         if pending is not None:
-            delimiter, keep = pending
-            text, index, pending = _close_region(raw, index, delimiter, keep)
+            text, index, pending = _close_region(raw, index, pending, budget)
             pieces.append(text)
             continue
         block = _starts_block_comment(raw, index, syntax.block)
         if block is not None:
             opener, closer = block
             pieces.append(opener)
-            text, index, pending = _close_region(raw, index + len(opener), closer, True)
+            text, index, pending = _close_region(
+                raw, index + len(opener), _Region(closer, True), budget
+            )
             pieces.append(text)
             continue
         if _starts_line_comment(raw, index, syntax):
@@ -323,17 +519,21 @@ def _mask_line(
         opener = _starts_with_any(raw, index, _TRIPLE_QUOTES)
         if opener is not None:
             pieces.append(opener)
-            text, index, pending = _close_region(raw, index + len(opener), opener, False)
+            text, index, pending = _close_region(
+                raw, index + len(opener), _Region(opener, False), budget
+            )
             pieces.append(text)
             continue
         quote = _starts_with_any(raw, index, _LINE_QUOTES)
         if quote is not None:
-            text, index, pending = _consume_quoted(raw, index, quote, budget)
+            text, index, pending = _consume_quoted(raw, index, quote, budget, syntax)
             pieces.append(text)
             continue
+        if opened is None:
+            opened = _opens_heredoc(raw, index, syntax)
         pieces.append(raw[index])
         index += 1
-    return "".join(pieces), pending
+    return "".join(pieces), pending if pending is not None else opened
 
 
 def _mask_string_literals(
