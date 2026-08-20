@@ -1104,6 +1104,4 @@ def looks_like_sql(text: str, spend: Optional[Callable[[int], None]] = None) -> 
     return bool(SQL_STATEMENT.search(window)) or _has_select_from(window)
 
 
-SHELL_METACHARACTERS = re.compile(r"[;&|`$><\n]|\|\||&&|\$\(")
-
 NOSQL_OPERATOR_KEYS: FrozenSet[str] = frozenset({"$where", "$expr", "$function", "$accumulator"})

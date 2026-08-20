@@ -1514,7 +1514,10 @@ _SAFE_PARAMETER_TYPES: FrozenSet[str] = frozenset(
     {"int", "float", "bool", "complex", "UUID", "Decimal", "date", "datetime", "time"}
 )
 
-_ROUTE_PARAMETER = re.compile(r"<([a-zA-Z_][\w]*)(?:\(.{0,80}?\))?:([a-zA-Z_]\w*)>")
+# `[^)]{0,80}` chứ không phải `.{0,80}?`: dấu chấm khớp cả `)`, nên bản lười
+# phải nong ra từng bước để dò dấu đóng, và ở mỗi vị trí mở lại làm lại từ
+# đầu. Lớp phủ định không có gì để quay lui -- nó dừng ngay tại dấu đóng.
+_ROUTE_PARAMETER = re.compile(r"<([a-zA-Z_]\w*)(?:\([^)]{0,80}\))?:([a-zA-Z_]\w*)>")
 
 
 def _framework_typed_parameters(node: ast.AST, imports: ImportResolver) -> FrozenSet[str]:
