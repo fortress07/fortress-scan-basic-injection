@@ -69,5 +69,22 @@ def test_self_scan_of_the_tool_source_is_clean():
     assert result.findings == [], [f.rule_id + " " + f.path for f in result.findings]
 
 
-def test_version_is_0_2():
-    assert __version__ == "0.2.0"
+def test_version_is_the_first_stable_release():
+    assert __version__ == "0.1.0"
+
+
+def test_pyproject_declares_the_same_version():
+    """Hai chỗ ghi số bản thì sớm muộn cũng lệch nhau; khoá lại ngay.
+
+    Số bản trong pyproject.toml là thứ đi vào wheel và vào tên bản phát hành,
+    còn `__version__` là thứ in ra ở `--version` và nằm trong mọi tệp JSON/
+    SARIF. Lệch nhau nghĩa là báo cáo nói dối về bản đã tạo ra nó.
+    """
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'version = "%s"' % __version__ in text
+
+
+def test_pyproject_no_longer_claims_to_be_beta():
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "Development Status :: 5 - Production/Stable" in text
+    assert "Development Status :: 4 - Beta" not in text

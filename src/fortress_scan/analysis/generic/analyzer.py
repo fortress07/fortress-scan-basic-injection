@@ -417,7 +417,7 @@ class _Analysis:
             if chain is None:
                 index += 1
                 continue
-            mark = self.tainted.get(chain) or self._source_mark(chain, tokens[index].line)
+            mark = self._mark_for(chain, tokens[index].line)
             if mark is not None:
                 hits.append((index, mark))
             index = max(next_index, index + 1)
@@ -438,6 +438,36 @@ class _Analysis:
         if surviving is None or cleared is None or cleared == _EVERY_CATEGORY:
             return None
         return replace(surviving, cleared=cleared)
+
+    def _mark_for(self, chain: str, line: int) -> Optional[TaintMark]:
+        """Vết nhiễm của một chuỗi truy cập, kể cả khi nó đi qua thuộc tính.
+
+        `args` bẩn thì `args.host` cũng bẩn: đọc một trường ra khỏi giá trị bẩn
+        không rửa sạch nó. Trước đây chỉ tên ĐẦY ĐỦ mới được tra, nên đúng cách
+        viết phổ biến nhất của mọi framework -- gom tham số vào một biến rồi
+        lấy từng trường -- rơi thẳng qua lưới:
+
+            local args = ngx.req.get_uri_args()
+            os.execute("ping " .. args.host)      -- không thấy vết nhiễm nào
+
+        Phép tra theo tiền tố này đã có sẵn cho bảng nguồn ( vì `req.query.x`
+        phải khớp `req.query` ), chỗ thiếu chỉ là bảng biến bẩn.
+        """
+        mark = self.tainted.get(chain)
+        if mark is not None:
+            return mark
+        # Một trường được gán lại bằng giá trị đã khử độc thì nó sạch, kể cả
+        # khi cái gốc chứa nó vẫn bẩn: `args.host = tonumber(args.host)` phải
+        # thắng phép tra theo tiền tố, nếu không thì cách sửa đúng cũng bị báo.
+        if chain in self.sanitized:
+            return None
+        prefix = chain
+        while "." in prefix:
+            prefix = prefix.rsplit(".", 1)[0]
+            mark = self.tainted.get(prefix)
+            if mark is not None:
+                return mark
+        return self._source_mark(chain, line)
 
     def _source_mark(self, chain: str, line: int) -> Optional[TaintMark]:
         label = self.spec.sources.get(chain)
@@ -768,6 +798,11 @@ def _sanitizer_ranges(
     index = 0
     limit = len(tokens)
     while index < limit:
+        cast = _cast_range(tokens, index, spec, declared)
+        if cast is not None:
+            ranges.append(cast)
+            index = cast[1]
+            continue
         chain, next_index = _read_chain(tokens, index, spec)
         categories = spec.sanitizers.get(chain) if chain is not None else None
         if categories is not None and chain not in declared:
@@ -779,6 +814,57 @@ def _sanitizer_ranges(
                     continue
         index = max(next_index if chain else index + 1, index + 1)
     return ranges
+
+
+def _cast_range(
+    tokens: Sequence[Token], index: int, spec: LanguageSpec, declared: Set[str]
+) -> Optional[Tuple[int, int, FrozenSet[Category]]]:
+    """Phạm vi của một phép ép kiểu tiền tố, ví dụ `[int]$args[0]`.
+
+    Phép ép kiểu bám vào ĐÚNG biểu thức đứng ngay sau nó, nên phạm vi dừng
+    ngay sau chuỗi truy cập kế tiếp cùng các nhóm ngoặc bám theo. Kéo dài tới
+    hết câu lệnh là sai theo hướng nguy hiểm: trong `[int]$a + $b`, phép ép
+    kiểu không hề đụng tới `$b`.
+    """
+    delimiters = spec.cast_delimiters
+    if not delimiters or index + 3 >= len(tokens):
+        return None
+    opening, closing = delimiters
+    if tokens[index].kind != OP or tokens[index].text != opening:
+        return None
+    name, after_name = _read_chain(tokens, index + 1, spec)
+    if name is None or after_name >= len(tokens):
+        return None
+    if tokens[after_name].kind != OP or tokens[after_name].text != closing:
+        return None
+    categories = spec.sanitizers.get(name)
+    if categories is None or name in declared:
+        return None
+    return (after_name + 1, _postfix_end(tokens, after_name + 1, spec), categories)
+
+
+def _postfix_end(tokens: Sequence[Token], start: int, spec: LanguageSpec) -> int:
+    """Vị trí ngay sau biểu thức bắt đầu tại `start`, tính cả `[...]` và `(...)`."""
+    chain, cursor = _read_chain(tokens, start, spec)
+    if chain is None:
+        cursor = start + 1
+    limit = len(tokens)
+    while cursor < limit and tokens[cursor].kind == OP and tokens[cursor].text in "([{":
+        depth = 0
+        while cursor < limit:
+            token = tokens[cursor]
+            if token.kind == OP and not token.in_string:
+                if token.text in "([{":
+                    depth += 1
+                elif token.text in ")]}":
+                    depth -= 1
+                    if depth == 0:
+                        cursor += 1
+                        break
+            cursor += 1
+        else:
+            break
+    return cursor
 
 
 def _is_literal(tokens: Sequence[Token]) -> bool:

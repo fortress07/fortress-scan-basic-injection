@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fortress-scan-basic-injection"
-version = "0.2.0"
+version = "0.1.0"
 description = "Công cụ phân tích tĩnh phát hiện sớm các lỗ hổng injection trong mã nguồn."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -21,7 +21,7 @@ keywords = [
     "command-injection",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
@@ -55,7 +55,7 @@ Contact = "mailto:vophuvinh15012007@gmail.com"
 packages = ["src/fortress_scan"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE"]
+include = ["src", "tests", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -60,6 +60,29 @@ class StepKind(str, Enum):
     SINK = "sink"
 
 
+class PathContext(str, Enum):
+    """Vai trò của tệp trong dự án, suy từ đường dẫn.
+
+    Một lời gọi ``eval`` trong ``tests/fixtures/`` và một lời gọi ``eval`` trong
+    ``app/views.py`` là hai sự việc khác hẳn nhau về mức độ khẩn, dù cùng một
+    hình dạng mã. Bộ dò không có quyền GIẤU cái thứ nhất -- nó vẫn có thể là lỗ
+    hổng thật -- nhưng báo cả hai ở cùng một độ tin cậy thì người đọc mất luôn
+    thước đo. Ngữ cảnh đi kèm phát hiện để họ tự cân, và để --min-confidence
+    lọc được theo đúng cái họ muốn.
+    """
+
+    PRODUCTION = "production"
+    TEST = "test"
+    EXAMPLE = "example"
+    GENERATED = "generated"
+    VENDORED = "vendored"
+    DOCUMENTATION = "documentation"
+
+    @property
+    def is_production(self) -> bool:
+        return self is PathContext.PRODUCTION
+
+
 _SEVERITY_BY_NAME = {item.name.lower(): item for item in Severity}
 _CONFIDENCE_BY_NAME = {item.name.lower(): item for item in Confidence}
 
@@ -137,6 +160,13 @@ class Finding:
     references: Tuple[str, ...] = ()
     trace: Tuple[TraceStep, ...] = ()
     tags: Tuple[str, ...] = ()
+    # Vì sao bộ dò tin ( hoặc bớt tin ) vào phát hiện này. Mỗi mục là một câu
+    # kiểm chứng được bằng mắt trên chính đoạn mã, không phải lời quảng cáo:
+    # nguồn nào, đi qua gì, cái gì đã nâng hay hạ độ tin cậy. Người đọc cần
+    # bác bỏ được một phát hiện sai nhanh bằng đúng thứ đã tạo ra nó.
+    evidence: Tuple[str, ...] = ()
+    # Vai trò của tệp chứa phát hiện. Không lọc bỏ gì, chỉ nói ra.
+    context: PathContext = PathContext.PRODUCTION
 
     @property
     def fingerprint(self) -> str:
@@ -183,6 +213,8 @@ class Finding:
             "references": list(self.references),
             "trace": [step.to_dict() for step in self.trace],
             "tags": list(self.tags),
+            "evidence": list(self.evidence),
+            "context": self.context.value,
             "fingerprint": self.fingerprint,
         }
 
@@ -247,6 +279,11 @@ class ScanResult:
     stats: ScanStats = field(default_factory=ScanStats)
     suppressed: int = 0
     baselined: int = 0
+    # Phát hiện thật, đã dựng xong, nhưng nằm ngoài phạm vi --diff. Đếm riêng
+    # với baseline: baseline là "đã biết và chấp nhận", còn cái này là "chưa
+    # xét vì lần chạy này chỉ soi phần vừa đổi". Trộn hai con số lại là nói
+    # dối người đọc về thứ họ vừa được miễn.
+    out_of_diff: int = 0
 
     def counts_by_severity(self) -> Dict[str, int]:
         counts = {item.label: 0 for item in Severity}
@@ -271,5 +308,6 @@ class ScanResult:
                 "by_severity": self.counts_by_severity(),
                 "suppressed": self.suppressed,
                 "baselined": self.baselined,
+                "out_of_diff": self.out_of_diff,
             },
         }

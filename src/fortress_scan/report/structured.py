@@ -67,6 +67,13 @@ def to_sarif(result: ScanResult, tool_version: str) -> str:
                 "properties": {
                     "confidence": finding.confidence.label,
                     "category": finding.category.value,
+                    # Bằng chứng và ngữ cảnh đi kèm vào SARIF chứ không dừng ở
+                    # màn hình: code scanning của CI đọc tệp này, và người bấm
+                    # vào một cảnh báo ở đó cần đúng những dòng lý do như
+                    # người chạy trên terminal.
+                    "context": finding.context.value,
+                    "evidence": list(finding.evidence),
+                    "tags": list(finding.tags),
                 },
                 "locations": [
                     {
@@ -284,6 +291,8 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
             "- Mức độ: **%s** | Độ tin cậy: %s | Nhóm: %s"
             % (finding.severity.label, finding.confidence.label, finding.category.value)
         )
+        if not finding.context.is_production:
+            lines.append("- Ngữ cảnh tệp: %s" % _escape(finding.context.value))
         if finding.cwe:
             lines.append("- Điểm yếu: %s" % ", ".join(finding.cwe))
         if finding.owasp:
@@ -310,6 +319,16 @@ def to_markdown(result: ScanResult, tool_version: str) -> str:
                     % (where, _escape(step.label), _inline_code(neutralize(step.code)))
                 )
             lines.append("")
+        if finding.evidence:
+            # Cùng nội dung với phần "căn cứ" của báo cáo console. Markdown là
+            # định dạng hay được dán vào pull request, tức là chỗ mà người
+            # phản biện quyết định tin hay bác bỏ -- giấu phần lý do ở đây thì
+            # họ phải chạy lại công cụ mới thấy được thứ đã có sẵn.
+            lines.append("Căn cứ:")
+            lines.append("")
+            for reason in finding.evidence:
+                lines.append("- %s" % _escape(reason))
+            lines.append("")
         lines.append("**Cách khắc phục.** %s" % _escape(rule.remediation))
         lines.append("")
     return "\n".join(lines)
@@ -326,6 +345,47 @@ def rules_catalogue() -> str:
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def rule_explanation(rule_id: str) -> str:
+    """Toàn bộ những gì công cụ biết về một rule, dạng đọc được trên terminal.
+
+    `--list-rules` trả lời "có những rule nào"; câu hỏi thật sự của người vừa
+    nhận một phát hiện lại là "vì sao đây là lỗ hổng, và sửa thế nào cho đúng".
+    Trước đây họ phải mở README hoặc đọc mã nguồn registry để biết -- mà phần
+    khắc phục thì công cụ đã có sẵn trong tay ngay từ đầu.
+    """
+    rule = get_rule(rule_id)
+    lines = [
+        "%s  %s" % (rule.id, rule.title),
+        "",
+        "Mức độ      : %s" % rule.severity.label,
+        "Độ tin cậy  : %s (mặc định của rule)" % rule.confidence.label,
+        "Nhóm        : %s" % rule.category.value,
+    ]
+    if rule.cwe:
+        lines.append("CWE         : %s" % ", ".join(rule.cwe))
+    if rule.owasp:
+        lines.append("OWASP       : %s" % ", ".join(rule.owasp))
+    lines.extend(["", "Vì sao đây là vấn đề", "-" * 20, rule.description])
+    if rule.remediation:
+        lines.extend(["", "Cách khắc phục", "-" * 20, rule.remediation])
+    if rule.references:
+        lines.extend(["", "Đọc thêm", "-" * 20])
+        lines.extend("  %s" % item for item in rule.references)
+    lines.extend(
+        [
+            "",
+            "Tắt riêng rule này : fortress-scan --disable %s" % rule.id,
+            "Chỉ chạy rule này  : fortress-scan --enable %s" % rule.id,
+        ]
+    )
+    # neutralize() TỪNG DÒNG rồi mới nối lại: nội dung rule do chính dự án
+    # viết, nhưng đường ra thì dùng chung với mọi thứ khác và một chỗ duy nhất
+    # chịu trách nhiệm thì không ai phải nhớ. Neutralize cả khối một lượt thì
+    # chính dấu xuống dòng cũng bị escape, và tài liệu nhiều đoạn biến thành
+    # một dòng dài đặc \\x0a.
+    return "\n".join(neutralize(line) for line in lines) + "\n"
 
 
 def _escape(text: str) -> str:

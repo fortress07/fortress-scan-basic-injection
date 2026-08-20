@@ -274,6 +274,11 @@ PROPAGATING_METHODS: FrozenSet[str] = frozenset(
     }
 )
 
+# Phương thức mà đối số ĐẦU TIÊN là một khoá tra cứu, không phải dữ liệu chảy
+# ra. Kết quả sinh ra từ chính đối tượng được tra, nên vết nhiễm của khoá dừng
+# ở đây.
+KEYED_LOOKUP_METHODS: FrozenSet[str] = frozenset({"get", "pop", "setdefault"})
+
 PROPAGATING_CALLS: FrozenSet[str] = frozenset(
     {
         "str",
@@ -290,6 +295,14 @@ PROPAGATING_CALLS: FrozenSet[str] = frozenset(
         "reversed",
         "json.loads",
         "json.load",
+        # sqlalchemy.text() bọc một chuỗi câu lệnh; nó KHÔNG làm chuỗi đó an
+        # toàn hơn, nhưng cũng không làm nó kém hằng đi. Không nhận ra thì
+        # dạng tham số hoá đúng chuẩn -- text("... :id") kèm dict tham số --
+        # bị báo là "câu lệnh không phải hằng", tức là báo nhầm vào đúng cách
+        # sửa mà chính công cụ này khuyên dùng.
+        "sqlalchemy.text",
+        "sqlalchemy.sql.text",
+        "sqlalchemy.sql.expression.text",
         "ast.literal_eval",
         "base64.b64decode",
         "base64.b64encode",

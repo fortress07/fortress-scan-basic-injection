@@ -76,6 +76,7 @@ class FindingBuilder:
         confidence: Optional[Confidence] = None,
         trace: Sequence[TraceStep] = (),
         tags: Sequence[str] = (),
+        evidence: Sequence[str] = (),
     ) -> None:
         if not self._unit.config.rule_enabled(rule_id):
             return
@@ -110,6 +111,7 @@ class FindingBuilder:
             references=rule.references,
             trace=tuple(trace),
             tags=tuple(tags),
+            evidence=tuple(evidence),
         )
         existing = self._findings.get(key)
         if existing is None or finding.sort_key < existing.sort_key:

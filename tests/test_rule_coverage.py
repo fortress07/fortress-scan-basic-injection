@@ -9,7 +9,7 @@ import pytest
 from fortress_scan.core.config import Config
 from fortress_scan.core.engine import scan_source
 from fortress_scan.core.registry import all_rules
-from fortress_scan.languages import JAVA, JAVASCRIPT, MANIFEST, PYTHON, SHELL
+from fortress_scan.languages import JAVA, JAVASCRIPT, MANIFEST, PYTHON, SHELL, WORKFLOW
 
 BIDI_OVERRIDE = chr(0x202E)
 ZERO_WIDTH_SPACE = chr(0x200B)
@@ -39,6 +39,35 @@ TRIGGERS: Dict[str, Tuple[str, str]] = {
     "FSB-CMD-004": (
         SHELL,
         "#!/bin/bash\nTARGET=$1\nrsync -a ./dist/ $TARGET\n",
+    ),
+    "FSB-CI-001": (
+        WORKFLOW,
+        "on:\n  issue_comment:\n    types: [created]\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        '      - run: echo "${{ github.event.issue.title }}"\n',
+    ),
+    "FSB-CI-002": (
+        WORKFLOW,
+        "on: issue_comment\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: actions/github-script@v7\n"
+        "        with:\n"
+        "          script: |\n"
+        '            console.log("${{ github.event.comment.body }}")\n',
+    ),
+    "FSB-CI-003": (
+        WORKFLOW,
+        "on: pull_request_target\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          ref: ${{ github.event.pull_request.head.sha }}\n",
+    ),
+    "FSB-CI-004": (
+        WORKFLOW,
+        "on: push\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: ben-thu-ba/setup@v3\n",
     ),
     "FSB-DESER-001": (
         PYTHON,
@@ -178,6 +207,40 @@ TRIGGERS: Dict[str, Tuple[str, str]] = {
 }
 
 SAFE_VARIANTS: Dict[str, Tuple[str, str]] = {
+    # Cách GitHub khuyến nghị: giá trị đi vào tiến trình qua môi trường, nên
+    # shell không bao giờ nhìn thấy nó ở dạng văn bản script.
+    "FSB-CI-001": (
+        WORKFLOW,
+        "on: issue_comment\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - env:\n          TIEU_DE: ${{ github.event.issue.title }}\n"
+        '        run: echo "$TIEU_DE"\n',
+    ),
+    # `script:` của một action KHÔNG eval nó thì chỉ là dữ liệu.
+    "FSB-CI-002": (
+        WORKFLOW,
+        "on: issue_comment\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: ben-khac/dan-nhan@abcdef0123456789abcdef0123456789abcdef01\n"
+        "        with:\n"
+        "          script: ${{ github.event.comment.body }}\n",
+    ),
+    # pull_request thường chạy trong hộp cát: không token ghi, không secret.
+    "FSB-CI-003": (
+        WORKFLOW,
+        "on: pull_request\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          ref: ${{ github.event.pull_request.head.sha }}\n",
+    ),
+    "FSB-CI-004": (
+        WORKFLOW,
+        "on: push\n"
+        "jobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - uses: ben-thu-ba/setup@abcdef0123456789abcdef0123456789abcdef01\n",
+    ),
     "FSB-CMD-001": (
         PYTHON,
         "import os\nimport shlex\nfrom flask import request\n"

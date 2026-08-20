@@ -1394,7 +1394,7 @@ class TestSanitizerNameShadowing:
 
 class TestDocumentedGaps:
     def test_cross_file_taint_is_now_tracked(self, tmp_path: Path):
-        """Từ 0.2 khoảng trống này đã lấp: dữ liệu bẩn qua ranh giới tệp
+        """Khoảng trống này đã lấp: dữ liệu bẩn qua ranh giới tệp
         được theo dõi ( tests/test_cross_file.py ). Giữ chỗ này để ghi nhớ
         ranh giới mới: chỉ Python; các ngôn ngữ quét theo token vẫn dừng ở
         ranh giới tệp."""
@@ -1445,7 +1445,7 @@ class TestDocumentedGaps:
 
 
 class TestRedosInOwnRegexes:
-    """Regex của chính công cụ chạy trên mã không tin cậy phải có chặn.
+    r"""Regex của chính công cụ chạy trên mã không tin cậy phải có chặn.
 
     Đo được thật trước khi sửa: nhánh `select\s+.+?\bfrom\b` là lazy
     dot-star nên một chuỗi 2 MB chứa "select" mà không có "from" khiến lượt

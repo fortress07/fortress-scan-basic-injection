@@ -29,31 +29,63 @@ app/routes.py
           dòng 42  chạy tới cursor.execute()
 ```
 
-**31 rule, phủ 16 họ injection:** SQL, NoSQL, LDAP, XPath, OS command, code injection
-(`eval`/`exec`), template (SSTI), expression language, XSS, XXE, file inclusion, reflection.
-Kèm 3 nhóm liên quan: giải tuần tự không an toàn, Trojan Source / ký tự ẩn, và script cài đặt tải mã
-từ xa về chạy.
+**35 rule, phủ 17 họ injection:** SQL, NoSQL, LDAP, XPath, OS command, code injection
+(`eval`/`exec`), template (SSTI), expression language, XSS, XXE, file inclusion, reflection, và
+injection trong workflow CI. Kèm 3 nhóm liên quan: giải tuần tự không an toàn, Trojan Source /
+ký tự ẩn, và script cài đặt tải mã từ xa về chạy.
 
-**Ngôn ngữ:** Python ( sâu nhất ), JavaScript, TypeScript, PHP, Java/JVM, Ruby, Go, C#, shell và
-`package.json`.
+**Ngôn ngữ:** Python ( sâu nhất ), JavaScript, TypeScript, PHP, Java/JVM, Ruby, Go, C#, Rust,
+PowerShell, Perl, Lua, shell, `package.json` và workflow GitHub Actions.
 
-Xem đầy đủ: `python -m fortress_scan --list-rules`
+Xem đầy đủ: `python -m fortress_scan --list-rules`, và giải thích từng rule:
+`python -m fortress_scan --explain FSB-SQL-001`
 
-### Có gì mới trong 0.2.0
+### Có gì mới trong 0.1.0 - bản chính thức đầu tiên
 
-- **Taint xuyên file cho Python** - nguồn ở tệp này chạy qua helper ở tệp khác rồi nổ ở tệp thứ ba
-  vẫn được nối. Phát hiện nằm tại chỗ gọi, đường đi in rõ tệp và dòng của sink thật. Giá thuê: phần
-  Python chậm thêm khoảng 2.5-3 lần ( hai vòng thu thập ) - đã đo trên 148 tệp stdlib là 3.5s -> 9.5s.
-- **4 họ lỗ hổng mới**: path traversal (`FSB-PATH-001`), SSRF (`FSB-SSRF-001`), open redirect
-  (`FSB-REDIR-001`), CRLF/header phản hồi (`FSB-HDR-001`) - tổng 31 rule / 16 họ.
-- `socket.recv()` gọi qua biến giờ là nguồn được nhận ra ( 0.1 từng bỏ sót ).
-- **Chống false positive** hết mức có kiểm chứng: cả 31 rule đều có cặp mẫu-nổi/mẫu-im hồi quy;
-  `flask.abort()`/`sys.exit()` trong guard giờ thực sự vô hiệu hóa taint.
-- **SARIF** có `endColumn` và `fingerprints` đầy đủ để GitHub Code Scanning định danh cảnh báo
-  chính xác xuyên các lần chạy.
-- Tự kiểm toán bảo mật trên chính công cụ ( sink-first + PoC bằng repo thù địch ): sandbox chặn
-  hết mọi primitive tạo tiến trình theo nền tảng, tệp cấu hình hỏng trong cây bị quét không còn
-  giết được cả lượt quét.
+Đây là bản **rời khỏi giai đoạn thử nghiệm**: bộ rule, định dạng báo cáo và các cờ dòng lệnh từ
+đây trở đi được coi là giao diện ổn định.
+
+**Phân tích sâu hơn, kêu oan ít hơn.** Toàn bộ nhóm này nhắm vào một chuyện: bớt báo nhầm mà
+không mù thêm chỗ nào. Mỗi mục đều có cặp kiểm tra "phải im lặng / phải bắn" trong `tests/`.
+
+- **Ngữ cảnh tệp**: phát hiện trong `tests/`, `examples/`, mã do máy sinh hay mã đi mượn bị hạ
+  đúng **một nấc** độ tin cậy và được gắn nhãn - không bao giờ bị giấu đi. Tắt bằng
+  `--no-context-demotion`.
+- **`assert x in CHO_PHEP`** giờ được đọc như `if x not in CHO_PHEP: raise`.
+- **Lớp `enum.Enum` do chính dự án khai báo** được coi là một danh sách cho phép:
+  `Lenh(gia_tri)` hoặc khớp một thành viên, hoặc ném `ValueError`.
+- **`bang.get(khoa)`** không còn mang vết nhiễm của *khoá* sang giá trị trả về - tra bảng ánh xạ
+  vốn là cách khử độc mà chính công cụ này khuyên dùng.
+- **Tham số đã được framework ép kiểu** ( `@app.route('/x/<int:so>')`, `def h(so: int)` của
+  FastAPI ) không còn bị coi là chuỗi tự do.
+- **`sqlalchemy.text('... :id')` kèm tham số ràng buộc** không còn bị gọi là "câu lệnh không phải hằng".
+- Ở các ngôn ngữ phân tích theo token, **trường của một giá trị bẩn giờ cũng bẩn**
+  (`const q = req.query; exec(q.host)`) - trước đây chỉ tên đầy đủ mới được tra.
+
+**Bằng chứng đi kèm mọi phát hiện.** Mỗi phát hiện mang theo vài dòng `evidence` nói rõ vì sao
+công cụ tin hoặc bớt tin: nguồn nào, đường đi mấy bước, có qua ranh giới tệp không, ngữ cảnh tệp
+có hạ mức không. Có mặt ở **cả bốn định dạng** - console (`-v`), JSON, SARIF và Markdown.
+
+**Phạm vi quét rộng hơn.**
+
+- **4 ngôn ngữ mới**: Rust, PowerShell, Perl, Lua ( kể cả OpenResty `ngx.*` ).
+- **Workflow CI là mã nguồn**, và có bộ phân tích riêng: 4 rule mới cho injection biểu thức
+  `${{ ... }}` trong `run:` (`FSB-CI-001`) và trong script inline của action (`FSB-CI-002`),
+  "pwn request" (`FSB-CI-003`), và action ghim bằng nhãn di chuyển được (`FSB-CI-004`).
+
+**Hai tính năng cho việc dùng hằng ngày.**
+
+- **`--diff patch`** - chỉ báo phát hiện chạm vào dòng vừa đổi. Đây là thứ khiến một bộ dò tĩnh
+  sống được trong CI: pull request không còn đỏ vì nợ của người khác. Công cụ **không tự chạy
+  `git`** - nó đọc một patch anh em đưa vào, nên vẫn không sinh tiến trình con nào.
+- **`--explain FSB-SQL-001`** - in đầy đủ vì sao rule đó là lỗ hổng và cách sửa đúng.
+- **`--fail-on-confidence`** - chỉ chặn CI theo phát hiện đủ chắc chắn.
+
+**Tự siết lại chính mình.** Bộ đọc patch và bộ đọc workflow đều coi đầu vào là **không tin cậy**:
+có trần kích thước, trần số dòng, trần số biểu thức; đường dẫn trong patch bị chặn không cho thoát
+ra ngoài cây quét; mẫu `${{ ... }}` chỉ chạy trên dòng có chứa nó và bị cắt theo độ dài để không
+tự biến công cụ thành nạn nhân của tệp nó đang đọc; phép tra khoảng dòng dùng `bisect` thay vì
+quét tuyến tính.
 
 ### Quét được những lỗ hổng nào ? ( đọc kĩ nhé vì còn một vài vuln chưa được cập nhật )
 
@@ -82,6 +114,7 @@ rule đăng ký phải có mẫu kích hoạt, nên bảng này không thể l�
 | SSRF | `FSB-SSRF-001` high | `requests.get(url_tu_input)`, PHP `file_get_contents($url_ng)` |
 | Open redirect | `FSB-REDIR-001` med | `flask.redirect(request.args['next'])`, `res.redirect(req.query.next)` |
 | CRLF / header phản hồi | `FSB-HDR-001` high | `resp.headers['X-Trace'] = gia_tri_ng`, PHP `header($gia_tri_ng)` |
+| Injection trong workflow CI | `FSB-CI-001` crit · `-002` crit · `-003` high · `-004` med | `run: echo "${{ github.event.issue.title }}"`, pwn request, action ghim bằng tag |
 
 ### Quét được những dự án nào ?
 
@@ -90,7 +123,7 @@ token nên chỉ bắt được dạng "nguồn -> biến -> sink" trong cùng m
 
 | Dự án của anh em viết bằng | Bắt được |
 | --- | --- |
-| **Python** - Flask, Django, FastAPI, CLI, script | 27/31 rule: command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode, path traversal, SSRF, redirect, header |
+| **Python** - Flask, Django, FastAPI, CLI, script | 27/35 rule: command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode, path traversal, SSRF, redirect, header |
 | **JavaScript / TypeScript** - Express, Node | command, code (`eval`), SQL, dynamic `require`, XSS, SSRF (`fetch`), redirect, path (`fs.readFile`), header (`setHeader`) |
 | **PHP** - `$_GET`/`$_POST`/`$_COOKIE` | command, code (`eval`), SQL, `include`, `unserialize`, SSRF (`file_get_contents`), path (`fopen`), header (`header()`) |
 | **Ruby** - Rails-style `params` | command, code (`eval`), template (ERB), `Marshal.load` |
@@ -98,7 +131,12 @@ token nên chỉ bắt được dạng "nguồn -> biến -> sink" trong cùng m
 | **Go** - `net/http` + `database/sql` | command, SQL, template |
 | **C#** - ASP.NET `Request.Query` | SQL |
 | **Shell** - bash/sh | `eval`, biến không đặt trong nháy kép |
+| **Rust** - actix/axum + `std::process` | command ( tên chương trình do input quyết định ), SQL, path, SSRF, template, nạp thư viện động |
+| **PowerShell** - script build, script CI | `Invoke-Expression`, tạo tiến trình, SQL, `Import-Module`, path, SSRF |
+| **Perl** - CGI `$q->param` | command, `eval`, `open` hai đối số, SQL (DBI), `Storable::thaw` |
+| **Lua** - OpenResty `ngx.*` | `loadstring`, `os.execute`, `io.popen`, SQL, path, `ngx.say`, `ngx.redirect` |
 | **`package.json`** | script vòng đời tải mã từ xa về chạy |
+| **Workflow GitHub Actions** - `.github/workflows/*.yml` | injection biểu thức trong `run:` và script inline, pwn request, action ghim bằng nhãn di động |
 
 **Nguồn dữ liệu Python được nhận ra** : từng cái dưới đây mình đã chạy thử và đều ra **critical**:
 `flask.request` với `.args` / `.form` / `.cookies` / `.headers` / `.get_json()` / `.get_data()`,
@@ -153,7 +191,12 @@ python -m fortress_scan .                        # quét thư mục hiện tại
 python -m fortress_scan ./src -v                 # kèm đường đi dữ liệu + cách khắc phục
 python -m fortress_scan . --min-severity high    # chỉ xem lỗi nặng
 python -m fortress_scan . -f markdown -o BAO-CAO.md
-python -m fortress_scan . --no-cross-file   # mỗi tệp Python tự quét, như 0.1
+python -m fortress_scan . --no-cross-file   # mỗi tệp Python tự quét, từng tệp một
+python -m fortress_scan --explain FSB-SQL-001     # vì sao rule này là lỗ hổng, và sửa thế nào
+
+# Chỉ soi phần vừa đổi - dùng cho cổng CI trên pull request
+git diff --unified=0 origin/main... > changes.patch
+python -m fortress_scan . --diff changes.patch --fail-on-confidence high
 ```
 
 Sau khi cài còn có hai lệnh ngắn `fortress-scan` và `fscan`. Nếu shell báo không tìm thấy lệnh
@@ -162,7 +205,7 @@ Sau khi cài còn có hai lệnh ngắn `fortress-scan` và `fscan`. Nếu shell
 Thử với bộ mẫu có sẵn:
 
 ```bash
-python -m fortress_scan tests/samples/vulnerable --no-config -v   # phải ra 38 phát hiện, 20 critical
+python -m fortress_scan tests/samples/vulnerable --no-config -v   # phải ra 48 phát hiện, 26 critical
 python -m fortress_scan tests/samples/safe --no-config            # phải im lặng
 ```
 
@@ -258,7 +301,7 @@ Có hai bộ phân tích:
 | --- | --- | --- |
 | Cách đọc mã | dựng cây cú pháp đầy đủ (AST) | tách token bằng lexer riêng cho từng ngôn ngữ |
 | Theo dữ liệu | qua nhánh `if`, vòng lặp, `try`, và qua hàm khác cùng tệp | trong phạm vi một hàm |
-| Kết quả | sâu nhất, đủ 27/31 rule, **theo được taint xuyên file** | bắt được dạng "nguồn -> biến -> sink" trong cùng một hàm |
+| Kết quả | sâu nhất, đủ 27/35 rule, **theo được taint xuyên file** | bắt được dạng "nguồn -> biến -> sink" trong cùng một hàm |
 
 Rẽ nhánh thì hai nhánh được **gộp lại** ( nhiễm ở một nhánh là đủ để cảnh báo ), vòng lặp chỉ chạy vài
 vòng rồi dừng, và mỗi tệp có **ngân sách** số node/token nên một tệp dựng riêng để làm treo công cụ
@@ -306,13 +349,21 @@ Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `curso
 
 ### Các giới hạn khác
 
-- **Python theo được taint xuyên file** ( từ 0.2 ): nguồn ở `a.py` chạy qua helper ở `b.py` rồi nổ
+- **Python theo được taint xuyên file**: nguồn ở `a.py` chạy qua helper ở `b.py` rồi nổ
   ở `c.py` vẫn được nối, với chặn trên 2000 tệp / 20000 hàm mỗi lượt quét ( vượt thì báo rõ và hạ
   về từng tệp ). **Các ngôn ngữ quét theo token thì vẫn dừng ở ranh giới tệp.**
+- **Bộ quét theo token không nhìn xuyên qua thân `match` / `switch`.** Nó cắt câu lệnh ở dấu `{`,
+  nên `let dich = match ten { "a" => HANG_A, _ => HANG_B };` bị hiểu là "giá trị lấy từ `ten`" và
+  có thể ra một báo nhầm mức medium, dù mọi nhánh đều trả về hằng. Đây là lựa chọn CÓ CHỦ Ý theo
+  hướng an toàn: đoán ngược lại thì `_ => ten` -- một lỗ hổng thật -- sẽ biến mất trong im lặng.
 - **Ngoài Python là phân tích theo token**, không phải parser đầy đủ - độ bao phủ thấp hơn, và giá
   trị "độ tin cậy" trong báo cáo phản ánh đúng điều đó.
 - **Không theo được dữ liệu lưu vào thuộc tính đối tượng**, và không phát hiện **injection bậc hai**
   (dữ liệu bẩn ghi vào CSDL rồi đọc ra dùng lại).
+- **Workflow CI đọc bằng bộ quét theo dòng, không phải bộ phân tích YAML đầy đủ**: neo và alias
+  (`*ref`), luồng kiểu JSON (`run: {a: b}`) và biểu thức đi xuyên qua ranh giới của một action tự
+  viết đều nằm ngoài tầm nhìn. Đây là đánh đổi để giữ đúng lời hứa "không phụ thuộc thư viện ngoài"
+  mà không tự viết thêm một mặt tấn công ( alias bung vô hạn ) vào chính công cụ.
 - **Kiểu viết trên nhiều dòng hoặc có `;` bên trong kiểu dữ liệu thì chưa tách câu lệnh đúng** -
   ví dụ TypeScript `const o: {a: string; b: number} = nguon_ng` bị cắt câu ngay dấu `;`, nên chỉ
   còn cảnh báo mức medium.

@@ -10,9 +10,12 @@ from ..analysis.manifest import ManifestAnalyzer
 from ..analysis.python.analyzer import PythonAnalyzer, UnparsableSource
 from ..analysis.python.project import MAX_INDEX_FUNCTIONS, ProjectIndex
 from ..analysis.unicode_scan import UnicodeAnalyzer
-from ..languages import MANIFEST, PYTHON
+from ..analysis.workflow import WorkflowAnalyzer
+from ..languages import MANIFEST, PYTHON, WORKFLOW
 from ..security import paths as safe_paths
 from . import baseline as baseline_module
+from . import calibration as calibration_module
+from . import diffscope
 from . import suppression as suppression_module
 from .budget import Budget, BudgetExceeded
 from .config import Config
@@ -23,6 +26,7 @@ _PYTHON_ANALYZER = PythonAnalyzer()
 _GENERIC_ANALYZER = GenericAnalyzer()
 _UNICODE_ANALYZER = UnicodeAnalyzer()
 _MANIFEST_ANALYZER = ManifestAnalyzer()
+_WORKFLOW_ANALYZER = WorkflowAnalyzer()
 
 _MAX_FINDINGS = 20_000
 
@@ -114,6 +118,11 @@ def scan(
     if baseline_fingerprints:
         findings, baselined = baseline_module.apply(findings, baseline_fingerprints)
 
+    out_of_diff = 0
+    if settings.changed_lines is not None:
+        findings, out_of_diff, diff_notices = _apply_diff_scope(findings, settings.changed_lines)
+        coverage_notices.extend(diff_notices)
+
     stats.duration_seconds = time.monotonic() - started
     return ScanResult(
         root=str(root),
@@ -123,7 +132,49 @@ def scan(
         stats=stats,
         suppressed=suppressed,
         baselined=baselined,
+        out_of_diff=out_of_diff,
     )
+
+
+def _apply_diff_scope(
+    findings: Sequence[Finding], changed: diffscope.ChangedLines
+) -> Tuple[List[Finding], int, List[ScanNotice]]:
+    """Giữ lại phát hiện có ít nhất một bước chạm vào dòng đã thay đổi.
+
+    Lọc ở đây chứ không lọc lúc duyệt cây là có chủ ý: một tệp KHÔNG đổi vẫn
+    phải được phân tích, vì sink cũ của nó có thể vừa được một tệp mới đổi gọi
+    tới. Bỏ qua tệp ngay từ đầu thì đúng loại lỗ hổng mà pull request thật hay
+    tạo ra -- nối một handler mới vào một helper cũ -- không bao giờ bị bắt.
+    """
+    kept: List[Finding] = []
+    dropped = 0
+    for finding in findings:
+        if diffscope.touches_change(finding, changed):
+            kept.append(finding)
+        else:
+            dropped += 1
+    notices: List[ScanNotice] = []
+    if dropped or changed.truncated:
+        details = [
+            "bỏ --diff để xem toàn bộ phát hiện của cây mã",
+        ]
+        if changed.truncated:
+            details.append(
+                "patch vượt hạn mức nên phần cuối của nó không được đọc; "
+                "một số dòng vừa đổi có thể đang bị coi là không đổi"
+            )
+        notices.append(
+            ScanNotice(
+                kind="diff-scope-applied",
+                summary=(
+                    "chỉ báo phát hiện chạm vào %d dòng đã thay đổi trong %d tệp; "
+                    "%d phát hiện khác đã có sẵn trong cây mã bị giữ lại ngoài báo cáo"
+                    % (changed.line_count, len(changed.paths), dropped)
+                ),
+                details=tuple(details),
+            )
+        )
+    return kept, dropped, notices
 
 
 def scan_source(
@@ -143,6 +194,7 @@ def scan_source(
     if settings.honor_inline_suppressions:
         index = suppression_module.SuppressionIndex.from_lines(unit.lines, unit.language)
         findings, _ = suppression_module.partition(findings, index)
+    findings = calibration_module.apply(findings, settings)
     return sorted(findings, key=lambda item: item.sort_key)
 
 
@@ -316,7 +368,10 @@ def _analyze_file(
                 ),
             )
         findings, outcome.suppressed = suppression_module.partition(findings, index)
-    outcome.findings = findings
+    # Hiệu chỉnh chạy SAU khi ẩn theo chú thích: một phát hiện đã bị người viết
+    # mã tắt đi thì không cần ai cân lại độ tin cậy cho nó nữa, và tính bằng
+    # chứng cho thứ sẽ bị vứt chỉ tốn công.
+    outcome.findings = calibration_module.apply(findings, config)
     return outcome
 
 
@@ -338,6 +393,9 @@ def _analyze_unit(
     elif unit.language == MANIFEST:
         budget = Budget(config.node_budget, config.file_timeout_seconds)
         analyzer = _MANIFEST_ANALYZER
+    elif unit.language == WORKFLOW:
+        budget = Budget(config.node_budget, config.file_timeout_seconds)
+        analyzer = _WORKFLOW_ANALYZER
     else:
         budget = Budget(config.token_budget, config.file_timeout_seconds)
         analyzer = _GENERIC_ANALYZER

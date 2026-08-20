@@ -4,7 +4,20 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Optional, Tuple
 
 from ...core.model import Category, Confidence
-from ...languages import CSHARP, GO, JAVA, JAVASCRIPT, PHP, RUBY, SHELL, TYPESCRIPT
+from ...languages import (
+    CSHARP,
+    GO,
+    JAVA,
+    JAVASCRIPT,
+    LUA,
+    PERL,
+    PHP,
+    POWERSHELL,
+    RUBY,
+    RUST,
+    SHELL,
+    TYPESCRIPT,
+)
 from .lexer import LexerProfile
 
 
@@ -43,6 +56,11 @@ class LanguageSpec:
     backtick_command: bool = False
     bare_call_names: FrozenSet[str] = frozenset()
     assignment_operators: Tuple[str, ...] = ("=", "+=", ".=")
+    # Cú pháp ép kiểu dạng tiền tố: `[int]$x` của PowerShell, `(int)x` của C#.
+    # Đây là cách khử độc IDIOMATIC nhất của những ngôn ngữ đó -- không đọc
+    # được nó thì mọi script viết đúng đều bị kêu, mà bảng sanitizers lại chỉ
+    # nhận dạng `ten(...)`.
+    cast_delimiters: Tuple[str, str] = ()
 
 
 # Ép về số hoặc UUID thì không còn ký tự đặc biệt nào sống sót, ở bất kỳ nhóm
@@ -157,13 +175,29 @@ _SHELL_LEXER = LexerProfile(
 )
 
 
+# Mô tả của sink hiện thẳng trong thông điệp báo cáo, và cùng một mô tả được
+# dùng lại cho hàng chục API ở mười ngôn ngữ. Gõ tay mỗi lần thì chỉ cần sai
+# một bản là báo cáo mô tả cùng một loại điểm nguy hiểm theo hai kiểu khác nhau --
+# cùng lý do đã gộp nhãn nguồn dữ liệu thành hằng số ở ngay dưới.
+SINK_EVAL = "eval()"
+SINK_SHELL_COMMAND = "một lệnh shell"
+SINK_PROCESS_SPAWN = "việc tạo tiến trình"
+SINK_SQL_QUERY = "một truy vấn SQL"
+SINK_MODULE_LOAD = "việc nạp module"
+SINK_OUTBOUND_URL = "một URL gửi request ra ngoài"
+SINK_REDIRECT = "lệnh chuyển hướng"
+SINK_FILE_PATH = "một đường dẫn tệp"
+SINK_RAW_HTML = "nơi xuất HTML thô"
+SINK_OBJECT_DESERIALIZER = "một bộ giải tuần tự đối tượng"
+SINK_TEMPLATE_COMPILER = "một trình biên dịch template"
+
 _JS_SINKS: Tuple[GenericSink, ...] = (
     GenericSink(
         ("eval", "globalEval", "window.eval", "geval"),
         Category.CODE_EXECUTION,
         "FSB-EXEC-001",
         "FSB-EXEC-002",
-        "eval()",
+        SINK_EVAL,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -193,7 +227,7 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "một lệnh shell",
+        SINK_SHELL_COMMAND,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -201,7 +235,7 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-002",
         None,
-        "việc tạo tiến trình",
+        SINK_PROCESS_SPAWN,
         program_position=True,
     ),
     GenericSink(
@@ -209,7 +243,7 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -217,21 +251,21 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.DYNAMIC_IMPORT,
         "FSB-IMPORT-001",
         "FSB-IMPORT-002",
-        "việc nạp module",
+        SINK_MODULE_LOAD,
     ),
     GenericSink(
         ("fetch", "axios.get", "axios.post", "axios.put", "axios.delete", "axios.request"),
         Category.SSRF,
         "FSB-SSRF-001",
         None,
-        "một URL gửi request ra ngoài",
+        SINK_OUTBOUND_URL,
     ),
     GenericSink(
         ("redirect",),
         Category.REDIRECT,
         "FSB-REDIR-001",
         None,
-        "lệnh chuyển hướng",
+        SINK_REDIRECT,
     ),
     GenericSink(
         ("setHeader",),
@@ -246,21 +280,21 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.PATH,
         "FSB-PATH-001",
         None,
-        "một đường dẫn tệp",
+        SINK_FILE_PATH,
     ),
     GenericSink(
         ("write", "writeln", "document.write", "document.writeln", "insertAdjacentHTML", "html"),
         Category.MARKUP,
         "FSB-XSS-001",
         None,
-        "nơi xuất HTML thô",
+        SINK_RAW_HTML,
     ),
     GenericSink(
         ("unserialize", "node_serialize.unserialize", "serialize.unserialize"),
         Category.DESERIALIZATION,
         "FSB-DESER-001",
         "FSB-DESER-002",
-        "một bộ giải tuần tự đối tượng",
+        SINK_OBJECT_DESERIALIZER,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -329,7 +363,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.CODE_EXECUTION,
         "FSB-EXEC-001",
         "FSB-EXEC-002",
-        "eval()",
+        SINK_EVAL,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -345,7 +379,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "một lệnh shell",
+        SINK_SHELL_COMMAND,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -353,7 +387,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         argument_index=1,
         require_sql=True,
     ),
@@ -362,7 +396,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -401,7 +435,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.PATH,
         "FSB-PATH-001",
         None,
-        "một đường dẫn tệp",
+        SINK_FILE_PATH,
     ),
     GenericSink(
         ("call_user_func", "call_user_func_array", "array_map", "usort"),
@@ -563,7 +597,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.CODE_EXECUTION,
         "FSB-EXEC-001",
         "FSB-EXEC-002",
-        "eval()",
+        SINK_EVAL,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -571,7 +605,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "một lệnh shell",
+        SINK_SHELL_COMMAND,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -586,7 +620,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -594,7 +628,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.DESERIALIZATION,
         "FSB-DESER-001",
         "FSB-DESER-002",
-        "một bộ giải tuần tự đối tượng",
+        SINK_OBJECT_DESERIALIZER,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -602,7 +636,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.TEMPLATE,
         "FSB-TMPL-001",
         "FSB-TMPL-002",
-        "một trình biên dịch template",
+        SINK_TEMPLATE_COMPILER,
     ),
 )
 
@@ -635,7 +669,7 @@ _GO_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -650,7 +684,7 @@ _GO_SINKS: Tuple[GenericSink, ...] = (
         Category.TEMPLATE,
         "FSB-TMPL-001",
         None,
-        "một trình biên dịch template",
+        SINK_TEMPLATE_COMPILER,
     ),
     GenericSink(
         ("gob.NewDecoder", "Decode"),
@@ -682,7 +716,7 @@ _CSHARP_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "việc tạo tiến trình",
+        SINK_PROCESS_SPAWN,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -775,6 +809,378 @@ _SHELL_SOURCES: Dict[str, str] = {
     "$HTTP_USER_AGENT": HTTP_HEADER,
     "$GITHUB_HEAD_REF": "tham chiếu CI không tin cậy",
     "$GITHUB_EVENT_NAME": "đầu vào CI không tin cậy",
+}
+
+
+_RUST_LEXER = LexerProfile(
+    line_comments=("//",),
+    block_comments=(("/*", "*/"),),
+    # Rust KHÔNG có chuỗi nháy đơn. Dấu nháy đơn ở đây là literal ký tự
+    # ( 'a' ) và, quan trọng hơn, là lifetime ( &'a str, Vec<'static> ) --
+    # coi nó là mở chuỗi thì mọi struct có lifetime đều nuốt phần còn lại
+    # của tệp vào trong một chuỗi không bao giờ đóng.
+    plain_quotes=(),
+    interpolating_quotes=('"',),
+    interpolation_markers=(("{", "}"),),
+    identifier_extra="_",
+    multichar_operators=(
+        "::",
+        "->",
+        "=>",
+        "==",
+        "!=",
+        "<=",
+        ">=",
+        "&&",
+        "||",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "..=",
+        "..",
+    ),
+)
+
+_POWERSHELL_LEXER = LexerProfile(
+    line_comments=("#",),
+    block_comments=(("<#", "#>"),),
+    plain_quotes=("'",),
+    interpolating_quotes=('"',),
+    interpolation_markers=(("$(", ")"),),
+    dollar_interpolation=True,
+    identifier_extra="_$:-",
+    heredoc_markers=("@\"", "@'"),
+    multichar_operators=("-eq", "-ne", "-like", "-match", "::", "|", "&&", "||", "+="),
+)
+
+_PERL_LEXER = LexerProfile(
+    line_comments=("#",),
+    block_comments=(),
+    plain_quotes=("'",),
+    interpolating_quotes=('"',),
+    interpolation_markers=(("${", "}"), ("@{", "}")),
+    dollar_interpolation=True,
+    identifier_extra="_$@%:",
+    heredoc_markers=("<<",),
+    multichar_operators=("=>", "->", "==", "!=", "<=", ">=", "&&", "||", "=~", "::", ".="),
+)
+
+_LUA_LEXER = LexerProfile(
+    line_comments=("--",),
+    block_comments=(("--[[", "]]"),),
+    plain_quotes=("'",),
+    interpolating_quotes=('"',),
+    interpolation_markers=(),
+    raw_quotes=("[[",),
+    identifier_extra="_",
+    multichar_operators=("==", "~=", "<=", ">=", "..", "::"),
+)
+
+
+_RUST_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("Command.new", "process.Command.new", "std.process.Command.new"),
+        Category.COMMAND,
+        "FSB-CMD-002",
+        None,
+        SINK_PROCESS_SPAWN,
+        program_position=True,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("sql_query", "sqlx.query", "sqlx.query_as", "query_unchecked", "raw_sql"),
+        Category.SQL,
+        "FSB-SQL-001",
+        "FSB-SQL-002",
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+    GenericSink(
+        ("execute", "query", "query_row", "prepare"),
+        Category.SQL,
+        "FSB-SQL-001",
+        None,
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+    GenericSink(
+        ("render_template", "register_template_string", "Tera.one_off"),
+        Category.TEMPLATE,
+        "FSB-TMPL-001",
+        "FSB-TMPL-002",
+        SINK_TEMPLATE_COMPILER,
+    ),
+    GenericSink(
+        ("File.open", "fs.read", "fs.read_to_string", "fs.write", "NamedFile.open"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
+    ),
+    GenericSink(
+        ("reqwest.get", "Client.get", "get", "Url.parse"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        SINK_OUTBOUND_URL,
+    ),
+    GenericSink(
+        ("Library.new", "libloading.Library.new"),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        "FSB-IMPORT-002",
+        "việc nạp thư viện động",
+    ),
+    GenericSink(
+        ("Redirect.to", "Redirect.temporary", "Redirect.permanent"),
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        SINK_REDIRECT,
+    ),
+    GenericSink(
+        ("Html", "PreEscaped", "raw_html"),
+        Category.MARKUP,
+        "FSB-XSS-001",
+        None,
+        SINK_RAW_HTML,
+    ),
+)
+
+_RUST_SOURCES: Dict[str, str] = {
+    "env.args": COMMAND_LINE_ARG,
+    "std.env.args": COMMAND_LINE_ARG,
+    "env.var": ENVIRONMENT_VARIABLE,
+    "std.env.var": ENVIRONMENT_VARIABLE,
+    "req.query_string": QUERY_STRING,
+    "req.match_info": PATH_PARAM,
+    "req.headers": HTTP_HEADER,
+    "request.headers": HTTP_HEADER,
+    "web.Query": QUERY_PARAM,
+    "web.Path": PATH_PARAM,
+    "web.Form": FORM_FIELD,
+    "web.Json": REQUEST_BODY,
+    "Query": QUERY_PARAM,
+    "Path": PATH_PARAM,
+    "Form": FORM_FIELD,
+    "stdin": STANDARD_INPUT,
+    "read_line": STANDARD_INPUT,
+}
+
+# PowerShell gọi cmdlet không có dấu ngoặc, nên bộ đọc không tách được đối số
+# thật khỏi tên tham số: `Start-Process -FilePath ping -ArgumentList @(...)`
+# đi vào đây thành một khối token trong đó `-FilePath` là một định danh. Vì
+# vậy phép hỏi "giá trị này có phải hằng không" -- thứ sinh ra các rule -002/
+# -003 -- luôn trả lời "không", trên cả những dòng đúng chuẩn nhất. Bỏ hẳn
+# dynamic_rule ở đây: những sink này chỉ báo khi có vết nhiễm THẬT.
+#
+# Invoke-Expression là ngoại lệ duy nhất giữ lại: một Invoke-Expression nhận
+# giá trị không phải hằng thì tự nó đã là điều đáng rà, bất kể có dựng được
+# đường đi hay không.
+_POWERSHELL_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("Invoke-Expression", "iex", "IEX"),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        "FSB-EXEC-002",
+        "Invoke-Expression",
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("Add-Type", "ScriptBlock.Create", "Invoke-Command"),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        None,
+        "việc biên dịch mã lúc chạy",
+    ),
+    GenericSink(
+        ("Start-Process", "Invoke-Item", "cmd.exe", "Start-Job"),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        None,
+        SINK_SHELL_COMMAND,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("Invoke-Sqlcmd", "ExecuteReader", "ExecuteNonQuery", "ExecuteScalar"),
+        Category.SQL,
+        "FSB-SQL-001",
+        None,
+        "một câu lệnh SQL",
+        require_sql=True,
+    ),
+    GenericSink(
+        ("Import-Module", "Import-Clixml"),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        None,
+        SINK_MODULE_LOAD,
+    ),
+    GenericSink(
+        ("Invoke-WebRequest", "Invoke-RestMethod", "wget", "curl"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        SINK_OUTBOUND_URL,
+    ),
+    GenericSink(
+        ("Get-Content", "Set-Content", "Out-File", "Remove-Item"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
+    ),
+)
+
+_POWERSHELL_SOURCES: Dict[str, str] = {
+    "$args": COMMAND_LINE_ARG,
+    "$Args": COMMAND_LINE_ARG,
+    "$input": STANDARD_INPUT,
+    "$PSBoundParameters": "tham số của script",
+    "Read-Host": STANDARD_INPUT,
+    "$env:QUERY_STRING": QUERY_STRING,
+    "$env:GITHUB_HEAD_REF": "tham chiếu CI không tin cậy",
+    "$env:GITHUB_EVENT_PATH": "đầu vào CI không tin cậy",
+    "$Request": "request HTTP",
+}
+
+_PERL_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("eval",),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        "FSB-EXEC-002",
+        SINK_EVAL,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("system", "exec", "qx", "readpipe"),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        "FSB-CMD-003",
+        SINK_SHELL_COMMAND,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        # `open(FH, $cmd)` hai đối số là câu lệnh shell nếu chuỗi kết thúc
+        # bằng ống dẫn -- một trong những lỗ hổng Perl lâu đời nhất còn sống.
+        ("open",),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        None,
+        "open() hai đối số ( chạy shell khi chuỗi có ống dẫn )",
+        argument_index=1,
+    ),
+    GenericSink(
+        ("do", "require"),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        "FSB-IMPORT-002",
+        "việc nạp tệp mã",
+    ),
+    GenericSink(
+        ("prepare", "selectall_arrayref", "selectrow_array", "selectcol_arrayref"),
+        Category.SQL,
+        "FSB-SQL-001",
+        "FSB-SQL-002",
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+    GenericSink(
+        ("Storable.thaw", "thaw", "Data.Dumper.Eval"),
+        Category.DESERIALIZATION,
+        "FSB-DESER-001",
+        "FSB-DESER-002",
+        SINK_OBJECT_DESERIALIZER,
+    ),
+)
+
+_PERL_SOURCES: Dict[str, str] = {
+    "@ARGV": COMMAND_LINE_ARG,
+    "$ARGV": COMMAND_LINE_ARG,
+    "%ENV": ENVIRONMENT_VARIABLE,
+    "$ENV": ENVIRONMENT_VARIABLE,
+    "param": REQUEST_PARAM,
+    "$q.param": REQUEST_PARAM,
+    "$cgi.param": REQUEST_PARAM,
+    "url_param": QUERY_PARAM,
+    "http": HTTP_HEADER,
+    "$req.param": REQUEST_PARAM,
+    "STDIN": STANDARD_INPUT,
+}
+
+_LUA_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("load", "loadstring", "dofile", "loadfile", "assert"),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        "FSB-EXEC-002",
+        "bộ nạp mã của Lua",
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("os.execute", "io.popen"),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        "FSB-CMD-003",
+        SINK_SHELL_COMMAND,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("require",),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        "FSB-IMPORT-002",
+        SINK_MODULE_LOAD,
+    ),
+    GenericSink(
+        ("io.open", "io.lines", "io.input"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
+    ),
+    GenericSink(
+        ("ngx.say", "ngx.print"),
+        Category.MARKUP,
+        "FSB-XSS-001",
+        None,
+        SINK_RAW_HTML,
+    ),
+    GenericSink(
+        ("ngx.redirect",),
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        SINK_REDIRECT,
+    ),
+    GenericSink(
+        ("ngx.location.capture", "http.request"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        SINK_OUTBOUND_URL,
+    ),
+    GenericSink(
+        ("query", "execute"),
+        Category.SQL,
+        "FSB-SQL-001",
+        "FSB-SQL-002",
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+)
+
+_LUA_SOURCES: Dict[str, str] = {
+    "arg": COMMAND_LINE_ARG,
+    "os.getenv": ENVIRONMENT_VARIABLE,
+    "io.read": STANDARD_INPUT,
+    "ngx.var": "biến của request nginx",
+    "ngx.req.get_uri_args": QUERY_PARAM,
+    "ngx.req.get_post_args": FORM_FIELD,
+    "ngx.req.get_headers": HTTP_HEADER,
+    "ngx.req.get_body_data": REQUEST_BODY,
 }
 
 
@@ -940,6 +1346,98 @@ SPECS: Dict[str, LanguageSpec] = {
         sinks=_SHELL_SINKS,
         sanitizers={"printf": _COMMAND_ONLY},
         backtick_command=True,
+    ),
+    RUST: LanguageSpec(
+        language=RUST,
+        lexer=_RUST_LEXER,
+        sources=_RUST_SOURCES,
+        sinks=_RUST_SINKS,
+        sanitizers={
+            # parse::<T>() trả về Result nên phần khử độc chỉ có thật khi kết
+            # quả được mở ra; giữ ở mức khử sạch vì con số qua được parse
+            # không còn ký tự đặc biệt nào của bất kỳ nhóm nào.
+            "parse": _ALL_CATEGORIES,
+            "from_str_radix": _ALL_CATEGORIES,
+            "Uuid.parse_str": _ALL_CATEGORIES,
+            "shell_escape.escape": _COMMAND_ONLY,
+            "html_escape.encode_safe": _HTML_ONLY,
+            "askama_escape.escape": _HTML_ONLY,
+            "urlencoding.encode": _ALL_CATEGORIES,
+        },
+        declaration_keywords=frozenset({"let", "const", "static"}),
+        chain_separators=(".", "::"),
+        annotation_separator=":",
+        assignment_operators=("=", "+="),
+    ),
+    POWERSHELL: LanguageSpec(
+        language=POWERSHELL,
+        lexer=_POWERSHELL_LEXER,
+        sources=_POWERSHELL_SOURCES,
+        sinks=_POWERSHELL_SINKS,
+        sanitizers={
+            "int": _ALL_CATEGORIES,
+            "long": _ALL_CATEGORIES,
+            "guid": _ALL_CATEGORIES,
+            "System.Web.HttpUtility.HtmlEncode": _HTML_ONLY,
+            "System.Web.HttpUtility.UrlEncode": _ALL_CATEGORIES,
+        },
+        chain_separators=(".", "::"),
+        cast_delimiters=("[", "]"),
+        # PowerShell gọi cmdlet KHÔNG có dấu ngoặc: `Invoke-Expression $x`.
+        # Thiếu bảng này thì mọi sink của ngôn ngữ chỉ khớp ở dạng viết bằng
+        # cú pháp .NET, tức là gần như không bao giờ khớp.
+        bare_call_names=frozenset(
+            {
+                "Invoke-Expression",
+                "iex",
+                "IEX",
+                "Invoke-Command",
+                "Add-Type",
+                "Start-Process",
+                "Start-Job",
+                "Invoke-Item",
+                "Import-Module",
+                "Invoke-WebRequest",
+                "Invoke-RestMethod",
+                "Invoke-Sqlcmd",
+                "Get-Content",
+                "Set-Content",
+                "Out-File",
+                "Remove-Item",
+            }
+        ),
+    ),
+    PERL: LanguageSpec(
+        language=PERL,
+        lexer=_PERL_LEXER,
+        sources=_PERL_SOURCES,
+        sinks=_PERL_SINKS,
+        sanitizers={
+            "int": _ALL_CATEGORIES,
+            "uri_escape": _ALL_CATEGORIES,
+            "encode_entities": _HTML_ONLY,
+            "String.ShellQuote.shell_quote": _COMMAND_ONLY,
+            "shell_quote": _COMMAND_ONLY,
+            # quotemeta() thoát ký tự đặc biệt của REGEX. Dấu chấm phẩy, ống
+            # dẫn và dấu nháy đơn không nằm trong tập đó, nên nó không cứu
+            # được sink nào ở đây -- cùng lý do với preg_quote() của PHP.
+            "quotemeta": _NOTHING,
+        },
+        declaration_keywords=frozenset({"my", "our", "local"}),
+        chain_separators=("->", "::"),
+        backtick_command=True,
+    ),
+    LUA: LanguageSpec(
+        language=LUA,
+        lexer=_LUA_LEXER,
+        sources=_LUA_SOURCES,
+        sinks=_LUA_SINKS,
+        sanitizers={
+            "tonumber": _ALL_CATEGORIES,
+            "ngx.escape_uri": _ALL_CATEGORIES,
+            "ngx.quote_sql_str": frozenset({Category.SQL}),
+        },
+        declaration_keywords=frozenset({"local"}),
     ),
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
@@ -41,6 +42,12 @@ _MAX_SUMMARY_ROUNDS = 4
 _MAX_LOOP_ITERATIONS = 2
 _MAX_BLOCK_DEPTH = 48
 _SELF_NAMES = frozenset({"self", "cls", "mcs"})
+
+# Lớp cơ sở của module enum. `StrEnum` chỉ có từ 3.11 nhưng tên thì vẫn xuất
+# hiện trong mã nhắm bản mới, và bảng này chỉ so tên nên không cần bản nào.
+_ENUM_BASES = frozenset({"Enum", "IntEnum", "StrEnum", "Flag", "IntFlag", "ReprEnum"})
+
+_EVERY_CATEGORY: FrozenSet[Category] = frozenset(Category)
 
 
 class UnparsableSource(Exception):
@@ -89,6 +96,10 @@ class FunctionInfo:
     simple_name: str
     parameters: Tuple[str, ...]
     handler_sources: Dict[str, specs.SourceSpec] = field(default_factory=dict)
+    # Tham số mà framework đã ép kiểu trước khi hàm chạy ( bộ chuyển kiểu
+    # trong route, chú thích kiểu của FastAPI ). Khác "chưa biết gì": ở đây
+    # ta biết giá trị KHÔNG mang nổi ký tự phá cú pháp.
+    typed_parameters: FrozenSet[str] = frozenset()
     # Hàm của tệp khác mang sẵn summary và nguồn gốc của nó; hàm cục bộ thì
     # hai trường này trống và summary được tra ở module.summaries như trước.
     summary: Optional["Summary"] = None
@@ -154,6 +165,11 @@ class ModuleAnalysis:
         self.functions: Dict[str, FunctionInfo] = {}
         self.functions_by_name: Dict[str, List[FunctionInfo]] = {}
         self.summaries: Dict[str, Summary] = {}
+        # Lớp enum do chính tệp này khai báo. `Mau(gia_tri)` ném ValueError khi
+        # gia_tri không phải một thành viên, nên giá trị đi ra khỏi đó luôn là
+        # một trong những hằng đã viết sẵn trong thân lớp -- đúng định nghĩa
+        # của một phép kiểm danh sách cho phép, chỉ là viết bằng cú pháp khác.
+        self.enum_classes: Set[str] = set()
         self._name_values: Dict[str, Value] = {}
         self._attribute_refs: Dict[str, FrozenSet[CallableRef]] = {}
 
@@ -224,6 +240,17 @@ class ModuleAnalysis:
                         simple_name=child.name,
                         parameters=_parameter_names(child.args),
                         handler_sources=_handler_sources(child, self.imports),
+                        # CHỈ handler của framework. Chú thích kiểu trong Python
+                        # không được ép lúc chạy, nên `def f(x: int)` của một hàm
+                        # thường chỉ là lời hứa của tác giả -- tin nó là tự tạo ra
+                        # điểm mù. Với route handler thì khác: Flask trả 404 và
+                        # FastAPI trả 422 TRƯỚC khi thân hàm chạy, nên ở đó phép
+                        # ép kiểu là thật.
+                        typed_parameters=(
+                            _framework_typed_parameters(child, self.imports)
+                            if _is_route_handler(child, self.imports)
+                            else frozenset()
+                        ),
                     )
                     self.functions[qualname] = info
                     self.functions_by_name.setdefault(child.name, []).append(info)
@@ -231,7 +258,24 @@ class ModuleAnalysis:
                     stack.append((child, qualname))
                 elif isinstance(child, ast.ClassDef):
                     qualname = "%s.%s" % (prefix, child.name) if prefix else child.name
+                    if self._is_enum_class(child):
+                        self.enum_classes.add(qualname)
+                        self.enum_classes.add(child.name)
                     stack.append((child, qualname))
+
+    def _is_enum_class(self, node: ast.ClassDef) -> bool:
+        """Lớp này có kế thừa một lớp cơ sở của module enum không.
+
+        Chỉ nhìn lớp cơ sở VIẾT TRỰC TIẾP, không lần theo chuỗi kế thừa nhiều
+        tầng: một lớp trung gian ở tệp khác thì tại đây không đọc được, và
+        đoán bừa ở chỗ này là tự tay tắt một phát hiện thật.
+        """
+        for base in node.bases:
+            resolved = self.imports.qualname_of(base) or ""
+            tail = resolved.rsplit(".", 1)[-1]
+            if tail in _ENUM_BASES and (resolved == tail or resolved.startswith("enum.")):
+                return True
+        return False
 
     def _collect_globals(self, tree: ast.Module) -> Environment:
         evaluator = Evaluator(self, None, SUMMARY_MODE, {})
@@ -331,7 +375,15 @@ class Evaluator:
             else:
                 source = info.handler_sources.get(name)
                 if source is None:
-                    env[name] = UNKNOWN
+                    # Tham số đã được framework ép kiểu không chỉ là "không
+                    # phải nguồn bẩn" -- nó là giá trị ĐÃ BIẾT là vô hại. Để
+                    # nó ở UNKNOWN thì rule "nhận giá trị không phải hằng"
+                    # vẫn kêu, và kêu vào đúng cách viết chặt nhất.
+                    env[name] = (
+                        Value(constant=False, sanitized=True)
+                        if name in info.typed_parameters
+                        else UNKNOWN
+                    )
                     continue
                 step = self.builder.step(
                     StepKind.SOURCE,
@@ -425,6 +477,17 @@ class Evaluator:
             self._eval(node.test, env)
             if node.msg is not None:
                 self._eval(node.msg, env)
+            # `assert ten in CHO_PHEP` nói đúng điều mà `if ten not in
+            # CHO_PHEP: raise` nói, và đó là cách viết kiểm tra rất phổ biến
+            # trong mã nội bộ. Không đọc nó thì cả một họ cách viết ĐÚNG bị
+            # báo nhầm, và báo nhầm đúng vào chỗ tác giả đã cẩn thận.
+            #
+            # Vẫn còn một khác biệt thật: `python -O` gỡ bỏ assert, nên phép
+            # kiểm biến mất trong bản chạy tối ưu. Đó là một khuyết điểm về
+            # cách viết chứ không phải một đường injection đã dựng được, và
+            # gộp hai chuyện đó vào một phát hiện thì cả hai đều mờ đi.
+            positive, _ = _guarded_names(node.test)
+            _apply_guards(env, positive)
             return env
         if isinstance(node, ast.Delete):
             for target in node.targets:
@@ -837,6 +900,11 @@ class Evaluator:
                         constant=False,
                         sanitized=True,
                     )
+            # `Lenh(gia_tri)` trên một lớp enum: hoặc gia_tri khớp đúng một
+            # thành viên, hoặc lời gọi ném ValueError. Không có nhánh thứ ba,
+            # nên giá trị đi ra khỏi đây luôn là hằng viết sẵn trong thân lớp.
+            if effective in self.module.enum_classes and not self._rebound(effective, env):
+                return self._sanitized(argument_values, keyword_values, _EVERY_CATEGORY)
             source = specs.SOURCE_CALLS.get(effective)
             if source is not None and self._source_enabled(source):
                 return self._tainted(node, source)
@@ -862,7 +930,17 @@ class Evaluator:
             return combine(*argument_values) if argument_values else UNKNOWN
 
         if isinstance(node.func, ast.Attribute) and node.func.attr in specs.PROPAGATING_METHODS:
-            parts = [receiver] + argument_values
+            # `bang.get(khoa)` trả về GIÁ TRỊ trong bảng, không trả về khoá.
+            # Gộp cả khoá vào kết quả nghĩa là mọi phép tra bảng ánh xạ bằng
+            # dữ liệu người dùng đều bị coi là chảy tiếp -- mà tra bảng ánh
+            # xạ lại đúng là cách khử độc được khuyên dùng nhiều nhất. Phép
+            # tra bằng ngoặc vuông đã tính đúng từ trước ( _eval_subscript
+            # bỏ qua vết nhiễm của chỉ số ); chỗ này chỉ là cùng một sự việc
+            # viết bằng lời gọi phương thức.
+            carried = argument_values
+            if node.func.attr in specs.KEYED_LOOKUP_METHODS and argument_values:
+                carried = argument_values[1:]
+            parts = [receiver] + list(carried)
             aggregate = combine(*parts)
             return Value(
                 taint=aggregate.taint,
@@ -1407,8 +1485,17 @@ def _handler_sources(node: ast.AST, imports: ImportResolver) -> Dict[str, specs.
 
     if _is_route_handler(node, imports):
         request_source = specs.SourceSpec("tham số của request HTTP", Confidence.HIGH)
+        typed = _framework_typed_parameters(node, imports)
         for argument in named:
             if argument.arg in _SELF_NAMES:
+                continue
+            # Tham số mà chính framework đã ép kiểu thì không còn là chuỗi tự
+            # do nữa. `@app.route('/x/<int:so>')` khiến Flask trả 404 trước
+            # khi handler chạy nếu phần đó không phải số, và `def h(so: int)`
+            # trong FastAPI cũng vậy. Một số nguyên không mang nổi dấu chấm
+            # phẩy hay dấu nháy, nên coi nó là dữ liệu tấn công được là báo
+            # nhầm đúng vào cách viết được khuyến nghị nhất.
+            if argument.arg in typed:
                 continue
             sources.setdefault(argument.arg, request_source)
     elif node.name in specs.HANDLER_FUNCTION_NAMES:
@@ -1417,6 +1504,52 @@ def _handler_sources(node: ast.AST, imports: ImportResolver) -> Dict[str, specs.
             if argument.arg in specs.HANDLER_PARAMETER_NAMES:
                 sources.setdefault(argument.arg, event_source)
     return sources
+
+
+# Bộ chuyển kiểu trong đường dẫn route, và tên kiểu trong chú thích tham số,
+# mà kết quả KHÔNG THỂ mang ký tự phá cú pháp của bất kỳ nhóm sink nào.
+# `str`, `string`, `path` và `any` cố tình vắng mặt: chúng vẫn là chuỗi tự do.
+_SAFE_ROUTE_CONVERTERS: FrozenSet[str] = frozenset({"int", "float", "uuid"})
+_SAFE_PARAMETER_TYPES: FrozenSet[str] = frozenset(
+    {"int", "float", "bool", "complex", "UUID", "Decimal", "date", "datetime", "time"}
+)
+
+_ROUTE_PARAMETER = re.compile(r"<([a-zA-Z_][\w]*)(?:\(.{0,80}?\))?:([a-zA-Z_]\w*)>")
+
+
+def _framework_typed_parameters(node: ast.AST, imports: ImportResolver) -> FrozenSet[str]:
+    """Tham số mà framework bảo đảm kiểu trước khi handler chạy.
+
+    Hai nguồn bảo đảm, và cả hai đều đọc được ngay tại chỗ định nghĩa hàm:
+    bộ chuyển kiểu viết trong chuỗi route ( Flask, Bottle ), và chú thích kiểu
+    trên chính tham số ( FastAPI, Litestar ). Không suy diễn gì thêm: một chú
+    thích `str` hay `Any` vẫn để tham số ở nguyên trạng thái không tin cậy.
+    """
+    typed: Set[str] = set()
+    for decorator in getattr(node, "decorator_list", []):
+        if not isinstance(decorator, ast.Call):
+            continue
+        for argument in decorator.args[:2]:
+            if not isinstance(argument, ast.Constant) or not isinstance(argument.value, str):
+                continue
+            for converter, name in _ROUTE_PARAMETER.findall(argument.value[:2000]):
+                if converter.lower() in _SAFE_ROUTE_CONVERTERS:
+                    typed.add(name)
+
+    arguments = node.args
+    every = (
+        list(getattr(arguments, "posonlyargs", []) or [])
+        + list(arguments.args)
+        + list(arguments.kwonlyargs)
+    )
+    for argument in every:
+        annotation = argument.annotation
+        if annotation is None:
+            continue
+        resolved = imports.qualname_of(annotation) or ""
+        if resolved.rsplit(".", 1)[-1] in _SAFE_PARAMETER_TYPES:
+            typed.add(argument.arg)
+    return frozenset(typed)
 
 
 def _is_route_handler(node: ast.AST, imports: ImportResolver) -> bool:
