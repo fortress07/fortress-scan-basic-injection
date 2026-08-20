@@ -850,21 +850,27 @@ def _postfix_end(tokens: Sequence[Token], start: int, spec: LanguageSpec) -> int
         cursor = start + 1
     limit = len(tokens)
     while cursor < limit and tokens[cursor].kind == OP and tokens[cursor].text in "([{":
-        depth = 0
-        while cursor < limit:
-            token = tokens[cursor]
-            if token.kind == OP and not token.in_string:
-                if token.text in "([{":
-                    depth += 1
-                elif token.text in ")]}":
-                    depth -= 1
-                    if depth == 0:
-                        cursor += 1
-                        break
-            cursor += 1
-        else:
+        after = _group_end(tokens, cursor)
+        if after is None:
             break
+        cursor = after
     return cursor
+
+
+def _group_end(tokens: Sequence[Token], opening: int) -> Optional[int]:
+    """Vị trí ngay sau nhóm ngoặc mở tại `opening`; None nếu nó không đóng."""
+    depth = 0
+    for cursor in range(opening, len(tokens)):
+        token = tokens[cursor]
+        if token.kind != OP or token.in_string:
+            continue
+        if token.text in "([{":
+            depth += 1
+        elif token.text in ")]}":
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+    return None
 
 
 def _is_literal(tokens: Sequence[Token]) -> bool:

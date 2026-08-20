@@ -163,7 +163,7 @@ _LIST_KEYS = frozenset(
     )
 )
 
-_MAX_CONFIG_BYTES = 256 * 1024
+MAX_CONFIG_BYTES = 256 * 1024
 
 # Những khóa này thu hẹp thứ được quét hoặc được báo. Tệp cấu hình nằm trong
 # chính cây thư mục bị quét là dữ liệu không tin cậy khi ta quét mã của người
@@ -220,7 +220,7 @@ def load_config_file(path: Path) -> Dict[str, Any]:
         size = path.stat().st_size
     except OSError as exc:
         raise ConfigError("không đọc được thông tin tệp cấu hình %s" % path) from exc
-    if size > _MAX_CONFIG_BYTES:
+    if size > MAX_CONFIG_BYTES:
         raise ConfigError("tệp cấu hình lớn bất thường: %s" % path)
     try:
         raw = path.read_text(encoding="utf-8")

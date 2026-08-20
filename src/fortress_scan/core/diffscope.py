@@ -155,80 +155,115 @@ def parse_patch(text: str) -> ChangedLines:
     """
     if len(text) > MAX_PATCH_BYTES:
         raise DiffError("tệp patch lớn bất thường (giới hạn %d byte)" % MAX_PATCH_BYTES)
-
-    collected: Dict[str, List[Tuple[int, int]]] = {}
-    current: Optional[str] = None
-    new_line = 0
-    old_left = 0
-    new_left = 0
-    truncated = False
-    total = 0
-
+    reader = _PatchReader()
     for raw in text.splitlines():
+        reader.feed(raw)
+    return reader.result()
+
+
+class _PatchReader:
+    """Máy trạng thái đọc unified diff, mỗi lần một dòng.
+
+    Tách khỏi `parse_patch` vì cùng một vòng lặp trước đây phải mang bốn biến
+    trạng thái ( tệp hiện tại, số dòng bản mới, hạn mức còn lại của hai phía )
+    xuyên qua chín nhánh rẽ. Đọc thì rối, mà sửa thì dễ chạm nhầm nhánh khác:
+    chính chỗ này từng có lỗi đếm hunk chỉ theo một phía, và nó nấp được lâu
+    đúng vì không nhìn ra được ranh giới giữa "dòng tiêu đề" và "dòng thân".
+
+    Cắt theo đúng ranh giới đó: `feed` phân loại dòng, ba phương thức còn lại
+    lo ba loại. Hành vi giữ nguyên từng chi tiết -- bộ 23 kiểm tra của
+    tests/test_diff_scope.py là thứ chứng minh điều đó.
+    """
+
+    __slots__ = ("_collected", "_current", "_new_line", "_old_left", "_new_left",
+                 "_truncated", "_total")
+
+    def __init__(self) -> None:
+        self._collected: Dict[str, List[Tuple[int, int]]] = {}
+        self._current: Optional[str] = None
+        self._new_line = 0
+        self._old_left = 0
+        self._new_left = 0
+        self._truncated = False
+        self._total = 0
+
+    def result(self) -> ChangedLines:
+        merged = {path: _merge(ranges) for path, ranges in self._collected.items()}
+        return ChangedLines(merged, self._truncated)
+
+    def feed(self, raw: str) -> None:
         if raw.startswith("diff "):
-            current = None
-            old_left = new_left = 0
-            continue
-        if raw.startswith("+++ "):
-            current = _strip_prefix(raw[4:])
-            old_left = new_left = 0
-            continue
-        if raw.startswith("--- ") or raw.startswith("index "):
-            continue
-        match = _HUNK.match(raw)
-        if match is not None:
-            old_left = new_left = 0
-            try:
-                old_length = int(match.group(2)) if match.group(2) is not None else 1
-                start = int(match.group(3))
-                new_length = int(match.group(4)) if match.group(4) is not None else 1
-            except ValueError:
-                continue
-            if start < 0 or start > _MAX_LINE_NUMBER or new_length < 0 or old_length < 0:
-                continue
-            new_line = start
-            old_left = old_length
-            new_left = new_length
-            continue
-        if current is None or (old_left <= 0 and new_left <= 0):
-            continue
-        if not raw:
-            # Dòng trống trong thân hunk là một dòng ngữ cảnh rỗng.
-            new_line += 1
-            old_left -= 1
-            new_left -= 1
-            continue
-        marker = raw[0]
+            self._current = None
+            self._close_hunk()
+        elif raw.startswith("+++ "):
+            self._current = _strip_prefix(raw[4:])
+            self._close_hunk()
+        elif raw.startswith(("--- ", "index ")):
+            return
+        else:
+            match = _HUNK.match(raw)
+            if match is not None:
+                self._open_hunk(match)
+            elif self._inside_hunk():
+                self._body(raw)
+
+    def _inside_hunk(self) -> bool:
+        return self._current is not None and (self._old_left > 0 or self._new_left > 0)
+
+    def _close_hunk(self) -> None:
+        self._old_left = self._new_left = 0
+
+    def _open_hunk(self, match: "re.Match[str]") -> None:
+        self._close_hunk()
+        try:
+            old_length = int(match.group(2)) if match.group(2) is not None else 1
+            start = int(match.group(3))
+            new_length = int(match.group(4)) if match.group(4) is not None else 1
+        except ValueError:
+            return
+        if start < 0 or start > _MAX_LINE_NUMBER or new_length < 0 or old_length < 0:
+            return
+        self._new_line = start
+        self._old_left = old_length
+        self._new_left = new_length
+
+    def _body(self, raw: str) -> None:
+        # Dòng trống trong thân hunk là một dòng ngữ cảnh rỗng.
+        marker = raw[0] if raw else " "
         if marker == "+":
-            if total >= MAX_LINES:
-                truncated = True
-            elif current in collected or len(collected) < MAX_PATHS:
-                bucket = collected.setdefault(current, [])
-                if len(bucket) < MAX_RANGES_PER_PATH:
-                    bucket.append((new_line, new_line))
-                    total += 1
-                else:
-                    truncated = True
-            else:
-                truncated = True
-            new_line += 1
-            new_left -= 1
+            self._record()
+            self._new_line += 1
+            self._new_left -= 1
         elif marker == " ":
-            new_line += 1
-            old_left -= 1
-            new_left -= 1
+            self._new_line += 1
+            self._old_left -= 1
+            self._new_left -= 1
         elif marker == "-":
-            old_left -= 1
+            self._old_left -= 1
         elif marker == "\\":
             # "No newline at end of file" -- không phải một dòng nội dung.
-            continue
+            return
         else:
             # Ra khỏi thân hunk ( ví dụ dòng phân cách của định dạng email patch ).
-            old_left = new_left = 0
+            self._close_hunk()
 
-    return ChangedLines(
-        {path: _merge(ranges) for path, ranges in collected.items()}, truncated
-    )
+    def _record(self) -> None:
+        """Ghi nhận một dòng thêm mới, trong khuôn khổ ba hạn mức bộ nhớ."""
+        if self._total >= MAX_LINES:
+            self._truncated = True
+            return
+        current = self._current
+        if current is None:
+            return
+        if current not in self._collected and len(self._collected) >= MAX_PATHS:
+            self._truncated = True
+            return
+        bucket = self._collected.setdefault(current, [])
+        if len(bucket) >= MAX_RANGES_PER_PATH:
+            self._truncated = True
+            return
+        bucket.append((self._new_line, self._new_line))
+        self._total += 1
 
 
 def finding_lines(finding) -> Tuple[Tuple[str, Tuple[int, ...]], ...]:

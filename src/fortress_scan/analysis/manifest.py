@@ -230,12 +230,33 @@ def _lifecycle_commands(document: Dict[str, Any]) -> Iterable[Tuple[str, str]]:
 
 
 def _declared_lifecycle_commands(document: Dict[str, Any]) -> Iterable[Tuple[str, str]]:
+    """Hai chỗ khai báo script vòng đời, và chúng có hình dạng khác hẳn nhau.
+
+    npm gom tất cả vào một object `scripts`; Composer đặt thẳng ở cấp gốc và
+    cho phép một khoá mang cả một danh sách. Tách làm hai hàm vì gộp lại thì
+    một vòng lặp phải mang cả hai hình dạng cùng lúc, và chỗ rẽ nhánh dày đặc
+    đó chính là nơi hạn mức số lệnh từng bị bỏ quên.
+    """
+    for item in _script_object_commands(document):
+        yield item
+    for item in _top_level_commands(document):
+        yield item
+
+
+def _script_object_commands(document: Dict[str, Any]) -> Iterable[Tuple[str, str]]:
+    """Kiểu npm: `{"scripts": {"postinstall": "..."}}`."""
     scripts = document.get("scripts")
-    if isinstance(scripts, dict):
-        for name, command in scripts.items():
-            if isinstance(name, str) and isinstance(command, str):
-                if name in _LIFECYCLE_KEYS:
-                    yield name, command[:MAX_COMMAND_LENGTH]
+    if not isinstance(scripts, dict):
+        return
+    for name, command in scripts.items():
+        if not isinstance(name, str) or not isinstance(command, str):
+            continue
+        if name in _LIFECYCLE_KEYS:
+            yield name, command[:MAX_COMMAND_LENGTH]
+
+
+def _top_level_commands(document: Dict[str, Any]) -> Iterable[Tuple[str, str]]:
+    """Kiểu Composer: khoá ở cấp gốc, giá trị là chuỗi hoặc cả một danh sách."""
     for key in _LIFECYCLE_KEYS:
         value = document.get(key)
         if isinstance(value, str):

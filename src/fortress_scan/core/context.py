@@ -14,7 +14,7 @@ nó chạy cho mọi ngôn ngữ, không tốn ngân sách phân tích, và khô
 
 from __future__ import annotations
 
-from typing import FrozenSet, Optional, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from .model import PathContext
 
@@ -151,6 +151,30 @@ _GENERATED_SUFFIXES: Tuple[str, ...] = (
 )
 
 
+# Một bảng tra thay cho năm phép `if ... in ...` nối nhau. Thứ tự ưu tiên khi
+# một đường dẫn mang nhiều dấu hiệu vẫn giữ nguyên, chỉ là nó được quyết định
+# bằng THỨ TỰ THÀNH PHẦN trong đường dẫn chứ không phải thứ tự các câu if:
+# `vendor/x/tests/` gặp `vendor` trước nên vẫn là mã đi mượn, còn
+# `tests/fixtures/vendor_stub.py` gặp `tests` trước nên vẫn là test.
+def _build_directory_roles() -> Dict[str, PathContext]:
+    roles: Dict[str, PathContext] = {}
+    for names, role in (
+        (_VENDOR_DIRECTORIES, PathContext.VENDORED),
+        (_GENERATED_DIRECTORIES, PathContext.GENERATED),
+        (_TEST_DIRECTORIES, PathContext.TEST),
+        (_EXAMPLE_DIRECTORIES, PathContext.EXAMPLE),
+        (_DOCUMENTATION_DIRECTORIES, PathContext.DOCUMENTATION),
+    ):
+        for name in names:
+            # setdefault: một cái tên có mặt ở hai bảng thì bảng ĐỨNG TRƯỚC
+            # thắng, đúng như thứ tự các câu if cũ.
+            roles.setdefault(name, role)
+    return roles
+
+
+_DIRECTORY_ROLES: Dict[str, PathContext] = _build_directory_roles()
+
+
 def _stem(name: str) -> str:
     """Tên tệp bỏ đúng MỘT phần mở rộng cuối, giữ nguyên phần còn lại.
 
@@ -158,7 +182,7 @@ def _stem(name: str) -> str:
     dấu chấm thì `app.config.js` cũng biến thành `app` và mọi quy ước đặt tên
     theo kiểu `<tên>.<vai trò>.<đuôi>` mất chỗ bám.
     """
-    head, dot, tail = name.rpartition(".")
+    head, dot, _extension = name.rpartition(".")
     if not dot or not head:
         return name
     return head
@@ -201,19 +225,13 @@ def classify(relative_path: str) -> PathContext:
         return PathContext.PRODUCTION
 
     for part in parts[:-1]:
-        folded = part.lower()
-        if folded in _VENDOR_DIRECTORIES:
-            return PathContext.VENDORED
-        if folded in _GENERATED_DIRECTORIES:
-            return PathContext.GENERATED
-        if folded in _TEST_DIRECTORIES:
-            return PathContext.TEST
-        if folded in _EXAMPLE_DIRECTORIES:
-            return PathContext.EXAMPLE
-        if folded in _DOCUMENTATION_DIRECTORIES:
-            return PathContext.DOCUMENTATION
+        by_directory = _DIRECTORY_ROLES.get(part.lower())
+        if by_directory is not None:
+            return by_directory
+    return _classify_filename(parts[-1])
 
-    name = parts[-1]
+
+def _classify_filename(name: str) -> PathContext:
     if name in _TEST_FILENAMES:
         return PathContext.TEST
     stem = _stem(name)

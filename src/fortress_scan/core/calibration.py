@@ -20,7 +20,7 @@ oan, không phải để tự khen.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import List, Sequence
+from typing import List, Sequence, cast
 
 from .config import Config
 from .context import classify, demotion_reason
@@ -99,7 +99,14 @@ def _apply_one(finding: Finding, config: Config) -> Finding:
             reasons.append("%s (không hạ độ tin cậy vì đã tắt hiệu chỉnh ngữ cảnh)" % reason)
 
     trimmed = tuple(item[:_MAX_EVIDENCE_TEXT] for item in reasons[:MAX_EVIDENCE])
-    return replace(finding, confidence=confidence, context=context, tags=tags, evidence=trimmed)
+    # cast() vì dataclasses.replace() được khai báo trả về DataclassInstance
+    # chứ không phải kiểu của chính đối tượng đưa vào -- một giới hạn của
+    # typeshed, không phải của mã ở đây. Không có nó thì mọi bộ kiểm kiểu đều
+    # báo sai kiểu trả về của hàm này.
+    return cast(
+        Finding,
+        replace(finding, confidence=confidence, context=context, tags=tags, evidence=trimmed),
+    )
 
 
 def apply(findings: Sequence[Finding], config: Config) -> List[Finding]:

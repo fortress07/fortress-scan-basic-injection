@@ -227,6 +227,25 @@ class ModuleAnalysis:
             pass
         return globals_env
 
+    def _describe_function(self, node: ast.AST, qualname: str) -> FunctionInfo:
+        """Mọi thứ biết được về một hàm ngay tại chỗ nó được định nghĩa."""
+        # CHỈ handler của framework mới được hưởng phép ép kiểu. Chú thích kiểu
+        # trong Python không được ép lúc chạy, nên `def f(x: int)` của một hàm
+        # thường chỉ là lời hứa của tác giả -- tin nó là tự tạo ra điểm mù. Với
+        # route handler thì khác: Flask trả 404 và FastAPI trả 422 TRƯỚC khi
+        # thân hàm chạy, nên ở đó phép ép kiểu là thật.
+        typed: FrozenSet[str] = frozenset()
+        if _is_route_handler(node, self.imports):
+            typed = _framework_typed_parameters(node, self.imports)
+        return FunctionInfo(
+            node=node,
+            qualname=qualname,
+            simple_name=node.name,
+            parameters=_parameter_names(node.args),
+            handler_sources=_handler_sources(node, self.imports),
+            typed_parameters=typed,
+        )
+
     def _collect_functions(self, tree: ast.Module) -> None:
         stack: List[Tuple[ast.AST, str]] = [(tree, "")]
         while stack:
@@ -234,24 +253,7 @@ class ModuleAnalysis:
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     qualname = "%s.%s" % (prefix, child.name) if prefix else child.name
-                    info = FunctionInfo(
-                        node=child,
-                        qualname=qualname,
-                        simple_name=child.name,
-                        parameters=_parameter_names(child.args),
-                        handler_sources=_handler_sources(child, self.imports),
-                        # CHỈ handler của framework. Chú thích kiểu trong Python
-                        # không được ép lúc chạy, nên `def f(x: int)` của một hàm
-                        # thường chỉ là lời hứa của tác giả -- tin nó là tự tạo ra
-                        # điểm mù. Với route handler thì khác: Flask trả 404 và
-                        # FastAPI trả 422 TRƯỚC khi thân hàm chạy, nên ở đó phép
-                        # ép kiểu là thật.
-                        typed_parameters=(
-                            _framework_typed_parameters(child, self.imports)
-                            if _is_route_handler(child, self.imports)
-                            else frozenset()
-                        ),
-                    )
+                    info = self._describe_function(child, qualname)
                     self.functions[qualname] = info
                     self.functions_by_name.setdefault(child.name, []).append(info)
                     self.summaries[qualname] = Summary()
@@ -1528,6 +1530,11 @@ def _framework_typed_parameters(node: ast.AST, imports: ImportResolver) -> Froze
     trên chính tham số ( FastAPI, Litestar ). Không suy diễn gì thêm: một chú
     thích `str` hay `Any` vẫn để tham số ở nguyên trạng thái không tin cậy.
     """
+    return _route_converted_parameters(node) | _annotated_scalar_parameters(node, imports)
+
+
+def _route_converted_parameters(node: ast.AST) -> FrozenSet[str]:
+    """Tham số được ép kiểu ngay trong chuỗi route: `/x/<int:so>`."""
     typed: Set[str] = set()
     for decorator in getattr(node, "decorator_list", []):
         if not isinstance(decorator, ast.Call):
@@ -1538,18 +1545,22 @@ def _framework_typed_parameters(node: ast.AST, imports: ImportResolver) -> Froze
             for converter, name in _ROUTE_PARAMETER.findall(argument.value[:2000]):
                 if converter.lower() in _SAFE_ROUTE_CONVERTERS:
                     typed.add(name)
+    return frozenset(typed)
 
+
+def _annotated_scalar_parameters(node: ast.AST, imports: ImportResolver) -> FrozenSet[str]:
+    """Tham số mang chú thích kiểu vô hại: `def h(so: int)` của FastAPI."""
     arguments = node.args
     every = (
         list(getattr(arguments, "posonlyargs", []) or [])
         + list(arguments.args)
         + list(arguments.kwonlyargs)
     )
+    typed: Set[str] = set()
     for argument in every:
-        annotation = argument.annotation
-        if annotation is None:
+        if argument.annotation is None:
             continue
-        resolved = imports.qualname_of(annotation) or ""
+        resolved = imports.qualname_of(argument.annotation) or ""
         if resolved.rsplit(".", 1)[-1] in _SAFE_PARAMETER_TYPES:
             typed.add(argument.arg)
     return frozenset(typed)

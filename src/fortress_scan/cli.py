@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Sequence, Set, Tuple
 from . import __version__
 from .core import baseline as baseline_module
 from .core.config import (
+    MAX_CONFIG_BYTES,
     Config,
     ConfigError,
     build_config,
@@ -262,7 +263,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         config, config_notices = _resolve_config(args)
-    except (ConfigError, ValueError) as exc:
+    except (ConfigError, ValueError, safe_paths.PathConfinementError) as exc:
         _stderr("fortress-scan: %s" % exc)
         return EXIT_USAGE
     if config_notices:
@@ -273,8 +274,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     baseline_fingerprints: Set[str] = set()
     if args.baseline:
         try:
-            baseline_fingerprints = baseline_module.load(Path(args.baseline))
-        except baseline_module.BaselineError as exc:
+            baseline_fingerprints = baseline_module.load(
+                safe_paths.validate_input_path(
+                    args.baseline, "tệp baseline", baseline_module.MAX_BASELINE_BYTES
+                )
+            )
+        except (baseline_module.BaselineError, safe_paths.PathConfinementError) as exc:
             _stderr("fortress-scan: %s" % exc)
             return EXIT_USAGE
 
@@ -397,9 +402,9 @@ def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]
     if args.no_config:
         return config, ()
     if args.config:
-        source = Path(args.config)
-        if not source.is_file():
-            raise ConfigError("không tìm thấy tệp cấu hình: %s" % args.config)
+        source = safe_paths.validate_input_path(
+            args.config, "tệp cấu hình", MAX_CONFIG_BYTES
+        )
         return build_config(load_config_file(source), config), ()
     target = Path(args.target)
     source = find_config_file(target if target.exists() else Path("."))
@@ -495,18 +500,9 @@ def _load_patch(source: str) -> diffscope.ChangedLines:
     if source == "-":
         text = sys.stdin.read(diffscope.MAX_PATCH_BYTES + 1)
     else:
-        path = Path(source)
-        if not path.is_file():
-            raise ConfigError("không tìm thấy tệp patch: %s" % source)
-        try:
-            size = path.stat().st_size
-        except OSError as exc:
-            raise ConfigError("không đọc được tệp patch: %s" % source) from exc
-        if size > diffscope.MAX_PATCH_BYTES:
-            raise ConfigError(
-                "tệp patch lớn bất thường (giới hạn %d byte): %s"
-                % (diffscope.MAX_PATCH_BYTES, source)
-            )
+        path = safe_paths.validate_input_path(
+            source, "tệp patch", diffscope.MAX_PATCH_BYTES
+        )
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:

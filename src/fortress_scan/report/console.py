@@ -97,7 +97,12 @@ class ConsoleReporter:
         self._write("        %s" % self._paint(meta, "dim"))
         if finding.snippet:
             self._write("        %s" % self._paint(finding.snippet, "dim"))
-        if self._verbose and finding.trace:
+        if self._verbose:
+            self._render_details(finding)
+
+    def _render_details(self, finding: Finding) -> None:
+        """Phần chỉ hiện khi có -v: đường đi, căn cứ và cách khắc phục."""
+        if finding.trace:
             self._write("        %s" % self._paint("đường đi của dữ liệu:", "dim"))
             for step in finding.trace:
                 location = "dòng %d" % step.line
@@ -110,11 +115,11 @@ class ConsoleReporter:
                         neutralize(step.label),
                     )
                 )
-        if self._verbose and finding.evidence:
+        if finding.evidence:
             self._write("        %s" % self._paint("căn cứ:", "dim"))
             for reason in finding.evidence:
                 self._write("          - %s" % self._paint(neutralize(reason), "dim"))
-        if self._verbose and finding.remediation:
+        if finding.remediation:
             self._write("        %s %s" % (self._paint("khắc phục:", "dim"), finding.remediation))
 
     def _render_notices(self, result: ScanResult) -> None:
