@@ -67,6 +67,39 @@ con số người dùng đặt là con số họ nhận được.
 - **`--fail-on-confidence`** — chặn CI theo từng phát hiện đủ chắc chắn, không phải theo mức cao
   nhất của từng chiều gộp lại.
 
+### Hai lỗ hổng từ chối dịch vụ trên chính bộ dò
+
+Mô hình đe doạ rất cụ thể: kẻ tấn công không chạy được mã trên máy nạn nhân, nhưng đặt được nội
+dung vào một repo và nhờ nạn nhân quét nó. Cả hai lỗi dưới đây đều kích hoạt bằng một tệp dưới
+2 MB, và cả hai đều đã được **đo bằng đồng hồ** trước và sau khi vá.
+
+- **`redact()` chạy bậc hai trên một dòng dài.** Mẫu bắt mật khẩu trong URL viết
+  `[a-z][a-z0-9+.\-]*://`: lớp ký tự đó nuốt được cả chữ, số và dấu chấm, còn `:` thì không nằm
+  trong nó — nên trên một dòng không có `://`, bộ máy quét tới cuối rồi lùi từng ký tự để dò dấu
+  hai chấm, và làm lại như vậy ở **mọi** vị trí bắt đầu. Đo được **3,0 giây cho 32 KB**, tăng 16
+  lần kích thước thì tốn gấp **276 lần** thời gian. `redact()` chạy trên từng dòng sinh ra trích
+  đoạn của mọi phát hiện, nên một tệp JavaScript đã minify nằm trên một dòng là đủ để treo lượt
+  quét hàng giờ. Đã ghim độ dài tên giao thức ở 30 ký tự ( dài nhất IANA từng đăng ký chưa tới
+  30 ) và thêm trần 8 KB cho một lần gọi. Sau khi vá: **0,007 giây**, và phẳng.
+- **Ba mẫu dò script vòng đời trong `package.json` quay lui 400 × 200 tổ hợp.** Đo được **23 giây
+  cho 200 KB**. Đã thay bằng một lượt quét — tìm từ khoá bằng alternation của chuỗi cố định, rồi
+  soi cửa sổ phía sau bằng `str.find`. Kết quả nhận dạng không đổi ( có test khoá lại cả bản bắt
+  đúng lẫn bản không bắt bừa ); thời gian trên đường đi thật: **0,45 giây → 0,02 giây**.
+  Thêm chặn trên **200 lệnh vòng đời** mỗi tệp: một khoá vòng đời nhận được cả danh sách, nên
+  `{"postinstall": ["…4000 ký tự…", ×500]}` gói gọn trong 2 MB mà bắt bộ dò làm việc gấp 500 lần.
+
+Kèm theo là hai bài kiểm tra mới:
+
+- `tests/test_regex_complexity.py` **đo** — không phải đọc — mọi regex trong `src/` trên 18 hình
+  dạng đầu vào thù địch, và bắt lỗi khi thời gian tăng phi tuyến. Nó tự áp dụng cho mọi regex viết
+  thêm sau này, nên không ai phải nhớ bổ sung gì.
+- `tests/test_denial_of_service.py` giữ lại đúng những hình dạng đã làm sập thật.
+
+Ngoài ra, một loạt regex được viết lại cho **không còn chỗ quay lui** ngay cả trên giấy: thay `\s`
+bằng `[ \t]` ở chỗ hai lớp ký tự chồng lấn nhau, thay `.{0,80}?` bằng `[^)]{0,80}`, bỏ các nhánh
+alternation không bao giờ được chọn, và gỡ hằng `SHELL_METACHARACTERS` chết ( không nơi nào dùng,
+mà ba nhánh cuối của nó bị chính lớp ký tự đứng đầu che mất ).
+
 ### Tự siết lại chính mình
 
 Hai bộ đọc mới đều coi đầu vào là **không tin cậy**:

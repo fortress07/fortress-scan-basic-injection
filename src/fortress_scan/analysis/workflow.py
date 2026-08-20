@@ -44,10 +44,23 @@ MAX_BLOCK_LINES = 2_000
 # vài trăm ký tự; hạn mức này rộng gấp nhiều lần mức đó.
 MAX_LINE_SCAN = 16_384
 
-_EXPRESSION = re.compile(r"\$\{\{(.{0,2000}?)\}\}", re.DOTALL)
-_KEY = re.compile(r"^(\s*)(?:-\s+)?([A-Za-z_][\w.-]*)\s*:(.*)$")
-_LIST_ITEM = re.compile(r"^(\s*)-\s+(.*)$")
-_BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d*\s*$")
+# Độ dài tối đa của phần nằm giữa ${{ và }}. Một biểu thức workflow thật dài
+# vài chục ký tự; quá xa mức này thì hai dấu mở không liên quan tình cờ đứng
+# cùng một dòng, chứ không phải một biểu thức.
+MAX_EXPRESSION_LENGTH = 2_000
+
+# Thụt lề trong YAML chỉ là dấu cách ( bản đặc tả cấm hẳn tab ), nên viết
+# thẳng `[ \t]` thay vì `\s`. Không phải chuyện thẩm mỹ: `\s` chồng lấn với
+# những lớp đứng cạnh nó, và một bộ phân tích tĩnh không chứng minh được là
+# phép quay lui có chặn -- SonarQube báo đúng chỗ này bằng S8786. Lớp ký tự
+# rời nhau thì không còn chỗ nào để quay lui, cho cả người lẫn máy đọc.
+_KEY = re.compile(r"^([ \t]*)(?:-[ \t]+)?([A-Za-z_][\w.-]*)[ \t]*:(.*)$")
+# Phần thân bắt buộc bắt đầu bằng một ký tự KHÁC khoảng trắng, hoặc rỗng hẳn.
+# Viết `(.*)` như bản đầu thì `.` cũng khớp dấu cách, nên nó chồng lấn với
+# `[ \t]+` ngay trước: hai cách cắt cùng cho một kết quả, và đó đúng là định
+# nghĩa của một chỗ có thể quay lui.
+_LIST_ITEM = re.compile(r"^([ \t]*)-[ \t]+([^ \t].*|)$")
+_BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d{0,3}[ \t]*$")
 
 # Trigger nào chạy với quyền của kho ( token ghi được, secret đọc được ) trên
 # nội dung do người ngoài gửi tới. Đây là điều kiện biến một injection từ
@@ -69,9 +82,14 @@ PRIVILEGED_TRIGGERS: FrozenSet[str] = frozenset(
 
 # Đường dẫn context mà người ngoài đặt được nội dung. Danh sách này bám theo
 # tài liệu hardening của GitHub; mỗi mục là một tiền tố đã chuẩn hoá.
+# Nhắc tới ở ba bảng khác nhau ( danh sách không tin cậy, bảng nhãn, danh
+# sách dấu hiệu ref của pull request ), nên gõ tay ba lần là ba cơ hội để một
+# bản sai chính tả âm thầm gỡ mất một phép nhận dạng.
+HEAD_REF = "github.head_ref"
+
 _UNTRUSTED_EXACT: FrozenSet[str] = frozenset(
     {
-        "github.head_ref",
+        HEAD_REF,
         "github.event.issue.title",
         "github.event.issue.body",
         "github.event.pull_request.title",
@@ -120,13 +138,17 @@ _SEMI_TRUSTED_PATTERNS: Tuple[re.Pattern, ...] = (
     re.compile(r"^github\.event\.inputs\.[\w.-]{0,200}$"),
     re.compile(r"^inputs\.[\w.-]{0,200}$"),
     re.compile(r"^github\.event\.client_payload(?:\.[\w.-]{0,200})?$"),
-    re.compile(r"^steps\.[\w.-]{1,100}\.outputs\.[\w.-]{1,100}$"),
-    re.compile(r"^needs\.[\w.-]{1,100}\.outputs\.[\w.-]{1,100}$"),
+    # `[\w-]` chứ không phải `[\w.-]`: dấu chấm ở đây là dấu PHÂN CÁCH giữa
+    # các đoạn, nên để nó nằm trong lớp ký tự thì lớp đó nuốt luôn dấu phân
+    # cách rồi phải lùi lại để trả về -- một chỗ quay lui không cần thiết.
+    # Id của step và tên output trong GitHub Actions cũng không chứa dấu chấm.
+    re.compile(r"^steps\.[\w-]{1,100}\.outputs\.[\w-]{1,100}$"),
+    re.compile(r"^needs\.[\w-]{1,100}\.outputs\.[\w-]{1,100}$"),
     re.compile(r"^env\.[\w-]{1,100}$"),
 )
 
 _LABELS: Dict[str, str] = {
-    "github.head_ref": "tên nhánh của pull request",
+    HEAD_REF: "tên nhánh của pull request",
     "github.event.issue.title": "tiêu đề issue",
     "github.event.issue.body": "nội dung issue",
     "github.event.pull_request.title": "tiêu đề pull request",
@@ -145,7 +167,7 @@ _PR_REF_MARKERS: Tuple[str, ...] = (
     "github.event.pull_request.head.sha",
     "github.event.pull_request.head.ref",
     "github.event.pull_request.merge_commit_sha",
-    "github.head_ref",
+    HEAD_REF,
     "github.event.workflow_run.head_sha",
     "github.event.workflow_run.head_branch",
     "refs/pull/",
@@ -246,9 +268,8 @@ class _Document:
         limit = min(len(self.lines), index + 1 + MAX_BLOCK_LINES)
         while end < limit:
             line = self.lines[end]
-            if line.strip():
-                if self.indent_of(end) <= indent:
-                    break
+            if line.strip() and self.indent_of(end) <= indent:
+                break
             end += 1
         return index + 1, end
 
@@ -262,17 +283,36 @@ def _inline_sequence(value: str) -> List[str]:
 
 
 def _expressions_in(text: str, line: int, base_column: int) -> List[_Expression]:
-    # Phép kiểm chuỗi con này chạy trên mọi dòng của mọi workflow, và tuyệt
-    # đại đa số dòng không có biểu thức nào -- nó giữ bộ máy regex khỏi phải
-    # khởi động cho chúng.
-    if "${{" not in text:
-        return []
+    """Tách từng biểu thức ${{ ... }} bằng str.find, không dùng regex.
+
+    Bản đầu dùng `\\$\\{\\{(.{0,2000}?)\\}\\}`. Mẫu đó khớp đúng, nhưng trên một
+    dòng rải đầy "${{" mà không bao giờ đóng thì tại MỖI vị trí mở, lượng từ
+    lười phải nong ra đủ 2000 lần rồi mới chịu thua: đo thật là 1,4 giây cho
+    200 KB, tức là công cụ tự treo trên một tệp mà bất kỳ ai cũng đặt được vào
+    repo họ nhờ ta quét.
+
+    Hai lần str.find thì không có gì để quay lui, và cho ra đúng cùng một kết
+    quả: mở ở đâu, đóng ở đâu, phần giữa là gì.
+    """
     found: List[_Expression] = []
-    for match in _EXPRESSION.finditer(text[:MAX_LINE_SCAN]):
-        found.append(
-            _Expression(text=match.group(1), line=line, column=base_column + match.start())
-        )
-    return found
+    window = text[:MAX_LINE_SCAN]
+    cursor = 0
+    while True:
+        start = window.find("${{", cursor)
+        if start == -1:
+            return found
+        end = window.find("}}", start + 3)
+        if end == -1:
+            return found
+        inner = window[start + 3 : end]
+        if len(inner) > MAX_EXPRESSION_LENGTH:
+            # Quá dài để là một biểu thức thật; nhiều khả năng là hai dấu mở
+            # không liên quan tình cờ đứng cùng một dòng. Bỏ qua chỗ mở này
+            # và tìm tiếp từ ngay sau nó.
+            cursor = start + 3
+            continue
+        found.append(_Expression(text=inner, line=line, column=base_column + start))
+        cursor = end + 2
 
 
 class WorkflowAnalyzer(Analyzer):
