@@ -9,12 +9,17 @@ from ..languages import (
     GO,
     JAVA,
     JAVASCRIPT,
+    LUA,
     MANIFEST,
+    PERL,
     PHP,
+    POWERSHELL,
     PYTHON,
     RUBY,
+    RUST,
     SHELL,
     TYPESCRIPT,
+    WORKFLOW,
 )
 from .model import Finding
 
@@ -84,8 +89,8 @@ class _MaskBudget:
 # tắt sạch phát hiện của cả tệp, dù trong đó không có lấy một chú thích nào và
 # người review đọc qua cũng không thấy gì bất thường.
 #
-# `--` biến mất khỏi mọi ngôn ngữ: nó không mở chú thích ở bất kỳ ngôn ngữ nào
-# công cụ này đọc được, nên giữ lại chỉ còn tác dụng làm đường lách.
+# `--` chỉ có mặt ở Lua, nơi nó thật sự mở chú thích. Ở mọi ngôn ngữ khác nó
+# là toán tử giảm, nên khai nó ở đó chỉ còn tác dụng làm đường lách.
 _LINE_COMMENTS: Dict[str, Tuple[str, ...]] = {
     PYTHON: ("#",),
     JAVASCRIPT: ("//",),
@@ -97,6 +102,11 @@ _LINE_COMMENTS: Dict[str, Tuple[str, ...]] = {
     CSHARP: ("//",),
     SHELL: ("#",),
     MANIFEST: ("//",),
+    RUST: ("//",),
+    POWERSHELL: ("#",),
+    PERL: ("#",),
+    LUA: ("--",),
+    WORKFLOW: ("#",),
 }
 
 # Trong shell, `#` chỉ mở chú thích khi nó BẮT ĐẦU một từ. `curl http://x/#frag`
@@ -132,6 +142,15 @@ _BLOCK_COMMENTS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     CSHARP: (_C_COMMENT,),
     SHELL: (),
     MANIFEST: (_C_COMMENT,),
+    RUST: (_C_COMMENT,),
+    POWERSHELL: (("<#", "#>"),),
+    # Perl có POD và Lua có `--[[ ]]`, nhưng cả hai đều bắt đầu bằng dấu mở
+    # chú thích DÒNG của chính ngôn ngữ đó, nên nhánh chú thích dòng đã lo.
+    # Khai `/* */` cho chúng như mặc định mới là sai: `/*` không mở gì trong
+    # Perl hay Lua, và một dấu mở chú thích không có thật là một đường lách.
+    PERL: (),
+    LUA: (),
+    WORKFLOW: (),
 }
 
 # Ngôn ngữ lạ thì nhận cả hai dấu phổ biến: thà nhận dư một dấu mở chú thích còn
@@ -167,6 +186,22 @@ _SPANNING_QUOTES: Dict[str, FrozenSet[str]] = {
     CSHARP: frozenset('"'),
     SHELL: frozenset("\"'"),
     MANIFEST: frozenset(),
+    # Chuỗi nháy kép của Rust chứa được ký tự xuống dòng, không cần dấu gì thêm.
+    RUST: frozenset('"'),
+    # Perl cũng vậy, với cả hai loại nháy.
+    PERL: frozenset("\"'"),
+    # PowerShell và Lua thì không: chuỗi một dòng của chúng phải đóng trong
+    # dòng của nó. Dạng nhiều dòng của hai ngôn ngữ này là here-string `@"`
+    # và chuỗi ngoặc `[[`, xử lý ở _BRACKET_STRINGS.
+    POWERSHELL: frozenset(),
+    LUA: frozenset(),
+    # Scalar đặt trong nháy của YAML bắc qua nhiều dòng mà không cần dấu gì
+    # thêm, nên nó là chỗ giấu chỉ thị y hệt heredoc của PHP:
+    #     env:
+    #       MO_TA: "tài liệu
+    #     # fortress-scan: ignore-file"
+    # Với YAML, cả hai dòng là MỘT chuỗi. Không dòng nào là chú thích.
+    WORKFLOW: frozenset("\"'"),
 }
 _DEFAULT_SPANNING_QUOTES: FrozenSet[str] = frozenset("`")
 
@@ -211,7 +246,39 @@ _HEREDOC_OPENERS: Dict[str, "re.Pattern[str]"] = {
         + r"|<<(?P<upper>[A-Z_][A-Za-z0-9_]*)"
     ),
     SHELL: re.compile(r"<<(?!<)(?P<dash>-)?[ \t]*" + _HEREDOC_NAME),
+    # Perl dùng cùng cú pháp với shell, và mang cùng chỗ mập mờ với Ruby:
+    # `<<` cũng là toán tử dịch trái. Nhãn đặt trong nháy thì nhận luôn, còn
+    # nhãn trần chỉ nhận khi viết hoa, đúng quy ước heredoc và đủ để `$x << 2`
+    # không nuốt trọn phần đuôi tệp.
+    PERL: re.compile(
+        r"<<(?P<squiggly>~)?[ \t]*(?:\"(?P<dq>%s)\"|'(?P<sq>%s)')"
+        r"|<<(?P<upper>[A-Z_][A-Za-z0-9_]*)" % (_HEREDOC_LABEL, _HEREDOC_LABEL)
+    ),
 }
+
+# Chuỗi nhiều dòng có dấu đóng CỐ ĐỊNH, không có nhãn do người viết đặt. Đây
+# là dạng thứ tư của cùng một họ lỗ hổng đã vá cho heredoc: dòng nằm giữa
+# trông như dữ liệu với người review, nhưng nếu bộ mặt nạ đọc nó như mã thì
+# một dấu `#` hay `--` ở đầu dòng mở ra một "chú thích", và cả tệp tắt tiếng.
+#
+#     local tai_lieu = [[
+#     -- fortress-scan: ignore-file
+#     ]]
+#
+# Không dòng nào ở trên là chú thích: với Lua đó là một chuỗi ba dòng.
+#
+# Dấu mở dài đứng trước dấu ngắn để `[=[` không bị `[[` cướp mất.
+_BRACKET_STRINGS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    LUA: (("[==[", "]==]"), ("[=[", "]=]"), ("[[", "]]")),
+    POWERSHELL: (('@"', '"@'), ("@'", "'@")),
+}
+
+# Khối scalar của YAML: `mo_ta: |` hoặc `- run: >-`. Phần thân đóng bằng thụt
+# lề chứ không bằng một dấu đóng, nên nó cần một cơ chế riêng.
+_BLOCK_SCALAR_LANGUAGES: FrozenSet[str] = frozenset({WORKFLOW})
+_BLOCK_SCALAR_KEY = re.compile(
+    r"^([ \t]*)(?:-[ \t]+)?[A-Za-z_][\w.-]*[ \t]*:[ \t]*[|>][+-]?\d{0,3}[ \t]*$"
+)
 
 # `<<-` ( shell, Ruby ) và `<<~` ( Ruby ) cho phép thụt lề dòng kết thúc; PHP
 # 7.3 trở đi cũng vậy. Nhận dư một dòng kết thúc là đóng heredoc SỚM hơn thật,
@@ -236,6 +303,8 @@ class _CommentSyntax:
     continuation: bool = True
     heredoc: Optional["re.Pattern[str]"] = None
     heredoc_indented: bool = False
+    brackets: Tuple[Tuple[str, str], ...] = ()
+    block_scalars: bool = False
 
 
 def comment_syntax(language: Optional[str]) -> _CommentSyntax:
@@ -249,6 +318,8 @@ def comment_syntax(language: Optional[str]) -> _CommentSyntax:
         language in _LINE_CONTINUATION,
         _HEREDOC_OPENERS.get(language),
         language in _HEREDOC_INDENTED_ALWAYS,
+        _BRACKET_STRINGS.get(language, ()),
+        language in _BLOCK_SCALAR_LANGUAGES,
     )
 
 
@@ -333,6 +404,10 @@ class _Region:
     keep: bool
     heredoc: bool = False
     indented: bool = False
+    # Khối YAML đóng bằng THỤT LỀ chứ không bằng một dấu đóng: mọi dòng thụt
+    # sâu hơn con số này còn thuộc về nó. -1 nghĩa là vùng này không phải khối
+    # YAML.
+    scalar_indent: int = -1
 
 
 Pending = _Region
@@ -470,6 +545,46 @@ def _opens_heredoc(raw: str, index: int, syntax: _CommentSyntax) -> Optional[_Re
     return _Region(label, keep=False, heredoc=True, indented=indented)
 
 
+def _opens_block_scalar(masked: str, syntax: _CommentSyntax) -> Optional[_Region]:
+    """Dòng này có mở một khối scalar của YAML không (`mo_ta: |`).
+
+    Thân khối là dữ liệu trọn dòng, và nó đóng bằng thụt lề chứ không bằng một
+    dấu đóng. Không mô tả nó thì thân khối được đọc như mã, và một dấu `#` ở
+    đầu dòng trong đó mở ra một "chú thích" đủ để tắt cả tệp:
+
+        env:
+          MO_TA: |
+            # fortress-scan: ignore-file
+
+    Đây đúng là quyết định đã áp cho heredoc của shell: thân heredoc cũng
+    thường là script thật, mà vẫn bị che, vì người dùng muốn tắt cảnh báo thì
+    viết chỉ thị ở tầng ngôn ngữ bao ngoài chứ không viết lẫn vào dữ liệu.
+    """
+    if not syntax.block_scalars:
+        return None
+    match = _BLOCK_SCALAR_KEY.match(masked)
+    if match is None:
+        return None
+    return _Region("", keep=False, scalar_indent=len(match.group(1)))
+
+
+def _continues_block_scalar(raw: str, region: _Region) -> bool:
+    """Dòng trống, hoặc dòng thụt sâu hơn khoá đã mở khối, thì vẫn ở trong khối."""
+    if not raw.strip():
+        return True
+    return len(raw) - len(raw.lstrip()) > region.scalar_indent
+
+
+def _starts_bracket_string(
+    raw: str, index: int, brackets: Tuple[Tuple[str, str], ...]
+) -> Optional[Tuple[str, str]]:
+    """Cặp mở/đóng của chuỗi nhiều dòng bắt đầu đúng tại vị trí này."""
+    for opener, closer in brackets:
+        if raw.startswith(opener, index):
+            return opener, closer
+    return None
+
+
 def _closes_heredoc(raw: str, region: _Region) -> bool:
     """Dòng này có đúng là dòng kết thúc heredoc không.
 
@@ -492,6 +607,10 @@ def _mask_line(
     length = len(raw)
     # Thân heredoc là dữ liệu trọn dòng: không có mã nào nằm cùng dòng với nó,
     # nên nó được xử lý trước vòng lặp thay vì bên trong.
+    if pending is not None and pending.scalar_indent >= 0:
+        if _continues_block_scalar(raw, pending):
+            return " " * length, pending
+        pending = None
     if pending is not None and pending.heredoc:
         if not _closes_heredoc(raw, pending):
             return " " * length, pending
@@ -516,6 +635,14 @@ def _mask_line(
         if _starts_line_comment(raw, index, syntax):
             pieces.append(raw[index:])
             break
+        bracket = _starts_bracket_string(raw, index, syntax.brackets)
+        if bracket is not None:
+            pieces.append(bracket[0])
+            text, index, pending = _close_region(
+                raw, index + len(bracket[0]), _Region(bracket[1], False), budget
+            )
+            pieces.append(text)
+            continue
         opener = _starts_with_any(raw, index, _TRIPLE_QUOTES)
         if opener is not None:
             pieces.append(opener)
@@ -533,7 +660,10 @@ def _mask_line(
             opened = _opens_heredoc(raw, index, syntax)
         pieces.append(raw[index])
         index += 1
-    return "".join(pieces), pending if pending is not None else opened
+    masked = "".join(pieces)
+    if pending is None and opened is None:
+        opened = _opens_block_scalar(masked, syntax)
+    return masked, pending if pending is not None else opened
 
 
 def _mask_string_literals(

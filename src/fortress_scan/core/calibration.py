@@ -20,11 +20,11 @@ oan, không phải để tự khen.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import List, Sequence, cast
+from typing import Dict, List, Sequence, cast
 
+from ..security.text import display_path
 from .config import Config
 from .context import classify, demotion_reason
-from ..security.text import display_path
 from .model import Confidence, Finding, PathContext, StepKind
 
 # Mỗi phát hiện giữ tối đa ngần này dòng bằng chứng. Bằng chứng đi vào JSON và
@@ -123,4 +123,25 @@ def apply(findings: Sequence[Finding], config: Config) -> List[Finding]:
         if calibrated.confidence < config.min_confidence:
             continue
         result.append(calibrated)
-    return result
+    return _number_duplicates(result)
+
+
+def _number_duplicates(findings: List[Finding]) -> List[Finding]:
+    """Đánh số những phát hiện có cùng vân tay, theo thứ tự đọc trong tệp.
+
+    Hai dòng thủng giống hệt nhau trong cùng một tệp vốn cho ra cùng một vân
+    tay, và một mục baseline sẽ che cả hai. Nghĩa là người ta thêm một lỗ hổng
+    thứ hai mà cổng CI vẫn xanh. Số thứ tự tách chúng ra, còn cái đầu tiên
+    giữ nguyên vân tay cũ nên baseline đã ghi vẫn dùng được.
+
+    Đánh số sau khi đã lọc theo ngưỡng, để số thứ tự chỉ phụ thuộc vào những
+    phát hiện thật sự có mặt trong báo cáo.
+    """
+    seen: Dict[str, int] = {}
+    numbered: List[Finding] = []
+    for finding in sorted(findings, key=lambda item: item.sort_key):
+        material = finding.fingerprint_material
+        index = seen.get(material, 0)
+        seen[material] = index + 1
+        numbered.append(finding if index == 0 else replace(finding, occurrence=index))
+    return numbered

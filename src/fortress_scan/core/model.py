@@ -167,10 +167,13 @@ class Finding:
     evidence: Tuple[str, ...] = ()
     # Vai trò của tệp chứa phát hiện. Không lọc bỏ gì, chỉ nói ra.
     context: PathContext = PathContext.PRODUCTION
+    # Thứ tự trong nhóm những phát hiện giống hệt nhau ở cùng một tệp; xem
+    # `fingerprint`.
+    occurrence: int = 0
 
     @property
-    def fingerprint(self) -> str:
-        material = "\x1f".join(
+    def fingerprint_material(self) -> str:
+        return "\x1f".join(
             (
                 self.rule_id,
                 self.path.replace("\\", "/"),
@@ -178,6 +181,25 @@ class Finding:
                 _normalize(self.snippet),
             )
         )
+
+    @property
+    def fingerprint(self) -> str:
+        """Danh tính bền của một phát hiện, dùng cho baseline và SARIF.
+
+        Cố ý không chứa số dòng: thêm một dòng import ở đầu tệp thì mọi phát
+        hiện phía dưới không được biến thành phát hiện mới.
+
+        Nhưng chỉ chừng đó thì hai dòng thủng giống hệt nhau trong cùng một
+        tệp cho ra cùng một vân tay, và hậu quả rất nặng: baseline ghi lúc mới
+        có một dòng sẽ che luôn dòng thứ hai thêm vào sau. Người ta thêm một
+        lỗ hổng, còn công cụ báo sạch. Số thứ tự tách chúng ra.
+
+        Phát hiện đầu tiên trong nhóm giữ nguyên vân tay cũ, vì số thứ tự 0
+        không đi vào phép băm. Nhờ vậy mọi baseline đã ghi vẫn dùng được.
+        """
+        material = self.fingerprint_material
+        if self.occurrence:
+            material = "%s\x1f#%d" % (material, self.occurrence)
         return hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
 
     @property

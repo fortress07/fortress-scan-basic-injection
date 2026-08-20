@@ -36,6 +36,9 @@ class LexerProfile:
     dollar_interpolation: bool = False
     identifier_extra: str = "_$"
     heredoc_markers: Tuple[str, ...] = ()
+    # Nhãn heredoc TRẦN phải dính liền dấu mở. Đúng với Perl và PHP; shell thì
+    # `cat << EOF` có khoảng trắng vẫn là heredoc thật, nên cờ này tắt ở đó.
+    heredoc_bare_adjacent: bool = False
     escape_character: str = "\\"
     raw_quotes: Tuple[str, ...] = ()
     multichar_operators: Tuple[str, ...] = (
@@ -174,7 +177,9 @@ class Tokenizer:
             if not self._source.startswith(marker, self._index):
                 continue
             cursor = self._index + len(marker)
+            padded = False
             while cursor < self._length and self._source[cursor] in " \t~-":
+                padded = True
                 cursor += 1
             quote = ""
             if cursor < self._length and self._source[cursor] in "\"'":
@@ -186,7 +191,7 @@ class Tokenizer:
             ):
                 cursor += 1
             label = self._source[start:cursor]
-            if not label:
+            if not self._is_heredoc_label(label, quote, padded):
                 return False
             if quote and cursor < self._length and self._source[cursor] == quote:
                 cursor += 1
@@ -204,6 +209,24 @@ class Tokenizer:
             self._advance_over(segment)
             return True
         return False
+
+    def _is_heredoc_label(self, label: str, quote: str, padded: bool) -> bool:
+        """Chuỗi vừa đọc có đúng là nhãn heredoc không.
+
+        `<<` còn là toán tử dịch trái, và nhận nhầm nó là mở heredoc thì phần
+        còn lại của TỆP bị nuốt vào một chuỗi không bao giờ đóng. Mọi phát hiện
+        phía sau biến mất, không lỗi, không dấu vết. Một dòng `my $mask = 1 << 8;`
+        là đủ để làm điều đó với cả tệp Perl.
+
+        Hai luật, và cả hai đều lấy từ chính cú pháp của các ngôn ngữ này:
+        nhãn là một định danh nên không mở đầu bằng chữ số; và ở Perl nhãn
+        trần phải dính liền `<<`, có khoảng trắng là phép dịch trái.
+        """
+        if not label or label[0].isdigit():
+            return False
+        if padded and not quote and self._profile.heredoc_bare_adjacent:
+            return False
+        return True
 
     def _find_heredoc_end(self, label: str, start: int) -> int:
         cursor = start

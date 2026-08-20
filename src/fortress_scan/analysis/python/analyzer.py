@@ -1511,6 +1511,14 @@ def _handler_sources(node: ast.AST, imports: ImportResolver) -> Dict[str, specs.
 # Bộ chuyển kiểu trong đường dẫn route, và tên kiểu trong chú thích tham số,
 # mà kết quả KHÔNG THỂ mang ký tự phá cú pháp của bất kỳ nhóm sink nào.
 # `str`, `string`, `path` và `any` cố tình vắng mặt: chúng vẫn là chuỗi tự do.
+# Framework đọc chú thích kiểu của tham số handler rồi ÉP KIỂU trước khi gọi,
+# và trả về lỗi 4xx nếu ép không được. Flask, Bottle, Django và Pyramid không
+# nằm ở đây: chúng giao tham số đường dẫn vào dưới dạng chuỗi bất kể chú thích
+# viết gì.
+_ANNOTATION_ENFORCING_FRAMEWORKS: FrozenSet[str] = frozenset(
+    {"fastapi", "litestar", "starlite", "blacksheep", "ninja"}
+)
+
 _SAFE_ROUTE_CONVERTERS: FrozenSet[str] = frozenset({"int", "float", "uuid"})
 _SAFE_PARAMETER_TYPES: FrozenSet[str] = frozenset(
     {"int", "float", "bool", "complex", "UUID", "Decimal", "date", "datetime", "time"}
@@ -1549,7 +1557,26 @@ def _route_converted_parameters(node: ast.AST) -> FrozenSet[str]:
 
 
 def _annotated_scalar_parameters(node: ast.AST, imports: ImportResolver) -> FrozenSet[str]:
-    """Tham số mang chú thích kiểu vô hại: `def h(so: int)` của FastAPI."""
+    """Tham số mang chú thích kiểu vô hại, ở framework THẬT SỰ ép kiểu đó.
+
+    Python không ép kiểu theo chú thích lúc chạy, nên `def h(so: int)` chỉ là
+    lời hứa của tác giả. FastAPI và các framework cùng họ biến lời hứa đó
+    thành sự thật: chúng đọc chú thích, ép kiểu, và trả 422 trước khi thân hàm
+    chạy. Flask thì không. Với Flask, `@app.route('/x/<so>')` luôn giao vào
+    một chuỗi, chú thích `so: int` không đổi được điều đó.
+
+    Không phân biệt hai chuyện này là bỏ sót thật:
+
+        @app.route('/x/<so>')
+        def h(so: int):
+            os.system('ping ' + str(so))   # vẫn thủng, mà bộ dò lại im
+
+    Ép kiểu viết ngay trong đường dẫn route (`<int:so>`) thì Flask có thi hành,
+    nên nó được xét riêng ở _route_converted_parameters và không cần điều kiện
+    này.
+    """
+    if not imports.imports_any(_ANNOTATION_ENFORCING_FRAMEWORKS):
+        return frozenset()
     arguments = node.args
     every = (
         list(getattr(arguments, "posonlyargs", []) or [])

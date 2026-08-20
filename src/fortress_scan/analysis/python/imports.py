@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-from typing import Dict, List, Optional
+from typing import Dict, FrozenSet, List, Optional
 
 _MAX_CHAIN_DEPTH = 12
 
@@ -52,6 +52,13 @@ class ImportResolver:
 
     def is_alias_of(self, name: str, target: str) -> bool:
         return self._aliases.get(name) == target
+
+    def imports_any(self, roots: FrozenSet[str]) -> bool:
+        """Tệp này có nhập gì từ một trong những gói cấp cao nhất đó không."""
+        for target in self._aliases.values():
+            if target.split(".", 1)[0] in roots:
+                return True
+        return False
 
 
 def dotted_name(node: ast.AST, depth: int = 0) -> Optional[str]:

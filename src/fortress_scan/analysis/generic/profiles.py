@@ -863,6 +863,7 @@ _PERL_LEXER = LexerProfile(
     dollar_interpolation=True,
     identifier_extra="_$@%:",
     heredoc_markers=("<<",),
+    heredoc_bare_adjacent=True,
     multichar_operators=("=>", "->", "==", "!=", "<=", ">=", "&&", "||", "=~", "::", ".="),
 )
 

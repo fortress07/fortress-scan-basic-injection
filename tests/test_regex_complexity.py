@@ -31,28 +31,39 @@ import pytest
 
 import fortress_scan
 
-# Tỉ lệ thời gian khi đầu vào tăng 16 lần. Tuyến tính cho ~16, bậc hai cho
-# ~256. Ngưỡng đặt ở 60 chứ không sát 16: đây là phép đo trên máy thật, và
-# một bài kiểm tra đo thời gian mà đỏ ngẫu nhiên thì tệ hơn là không có --
-# cả đội sẽ học cách chạy lại cho tới khi nó xanh, kể cả khi nó đúng.
-MAX_SCALE = 60.0
-
-# Trần tuyệt đối cho một lần search. Đây mới là phép khẳng định chính: nó
-# không phụ thuộc vào nhiễu lịch trình, và một regex bậc hai thật thì vượt
-# nó rất xa chứ không sát mép.
+# Phép khẳng định CHÍNH là một trần tuyệt đối trên một đầu vào lớn, không
+# phải một tỉ lệ giữa hai phép đo.
+#
+# Lý do rất thực tế: các mẫu trong src/ chạy khoảng 10-25 nanô giây mỗi ký tự,
+# nên ở cỡ nhỏ một lần đo chỉ tốn vài chục micro giây. Chia hai con số cỡ đó
+# cho nhau là khuếch đại nhiễu lịch trình của hệ điều hành chứ không đo được
+# gì -- và một bài kiểm tra đo thời gian mà đỏ ngẫu nhiên còn tệ hơn là không
+# có, vì cả đội sẽ học cách chạy lại cho tới khi nó xanh, kể cả khi nó đúng.
+#
+# Ở cỡ 256 nghìn ký tự thì khoảng cách giữa hai lớp độ phức tạp rộng tới ba
+# bậc: mẫu tuyến tính tốn vài mili giây, còn lỗi bậc hai đã vá ( 3,0 giây cho
+# 32 KB ) sẽ tốn khoảng ba phút. Không có nhiễu nào bắc qua được khoảng đó.
 MAX_SECONDS = 1.0
 
 # Lấy thời gian NHỎ NHẤT của vài lần chạy. Nhiễu chỉ làm phép đo chậm đi chứ
 # không bao giờ làm nó nhanh lên, nên giá trị nhỏ nhất là ước lượng sạch nhất
-# của chi phí thật -- cách đo chuẩn của mọi bộ benchmark.
-REPEATS = 5
-
-# Dưới mức này thì phép chia hai số đo chỉ khuếch đại nhiễu chứ không nói lên
-# điều gì; trần tuyệt đối ở trên đã đủ canh phần đó.
-NOISE_FLOOR = 1e-4
+# của chi phí thật.
+REPEATS = 3
 
 SMALL = 2_000
-LARGE = 32_000
+LARGE = 256_000
+_SIZE_RATIO = LARGE / SMALL
+
+# Ngưỡng tỉ lệ SUY RA từ cỡ đầu vào chứ không gõ tay. Tuyến tính thì tỉ lệ
+# xấp xỉ 128, bậc hai thì xấp xỉ 16.384, nên hệ số 4 nằm gọn giữa hai lớp.
+#
+# Gõ tay một lần rồi đổi cỡ đầu vào là cách bài kiểm tra này tự làm mình đỏ:
+# đúng chuyện đó đã xảy ra khi LARGE tăng từ 32 nghìn lên 256 nghìn mà ngưỡng
+# vẫn nằm dưới mức tuyến tính.
+MAX_SCALE = _SIZE_RATIO * 4
+
+# Dưới mức này thì phép chia hai số đo chỉ khuếch đại nhiễu lịch trình.
+NOISE_FLOOR = 1e-3
 
 # Những hình dạng hay làm vỡ một quantifier tham lam: chuỗi lặp gồm đúng
 # những ký tự mà các lớp trong mẫu có thể nuốt, nhưng thiếu hẳn ký tự kết
@@ -156,6 +167,6 @@ def test_pattern_stays_linear(label: str, pattern: "re.Pattern[str]"):
             continue
         scale = large_seconds / small_seconds
         assert scale < MAX_SCALE, (
-            "%s tăng %.0f lần khi đầu vào tăng 16 lần trên dạng %r "
-            "-- dấu hiệu quay lui bậc hai" % (label, scale, shape)
+            "%s tăng %.0f lần khi đầu vào tăng %.0f lần trên dạng %r, "
+            "dấu hiệu quay lui bậc hai" % (label, scale, _SIZE_RATIO, shape)
         )
