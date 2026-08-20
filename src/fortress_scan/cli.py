@@ -16,10 +16,18 @@ from .core.config import (
     find_config_file,
     load_config_file,
 )
-from .core.model import ScanNotice, ScanResult, parse_confidence, parse_severity
+from .core import diffscope
+from .core.model import (
+    Confidence,
+    ScanNotice,
+    ScanResult,
+    parse_confidence,
+    parse_severity,
+)
 from .core.registry import all_rules, rules_digest
 from .report import (
     ConsoleReporter,
+    rule_explanation,
     rules_catalogue,
     supports_color,
     to_json,
@@ -98,6 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--fail-on",
         metavar="MUC",
         help="thoát khác 0 khi có phát hiện đạt mức này (mặc định: medium)",
+    )
+    selection.add_argument(
+        "--fail-on-confidence",
+        metavar="MUC",
+        help=(
+            "chỉ thoát khác 0 khi phát hiện đạt cả mức --fail-on lẫn độ tin cậy này "
+            "(mặc định: low, tức là mọi phát hiện đủ mức đều tính)"
+        ),
     )
     selection.add_argument(
         "--exit-zero", action="store_true", help="luôn thoát 0 kể cả khi có phát hiện"
@@ -179,10 +195,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="không theo dõi dữ liệu Python chảy qua ranh giới tệp (mỗi tệp tự quét)",
     )
+    behaviour.add_argument(
+        "--diff",
+        metavar="PATCH",
+        help=(
+            "chỉ báo phát hiện chạm vào dòng đã đổi trong một unified diff "
+            "(dùng - để đọc từ stdin); tạo bằng: git diff --unified=0 origin/main... > p.patch"
+        ),
+    )
+    behaviour.add_argument(
+        "--no-context-demotion",
+        action="store_true",
+        help=(
+            "không hạ độ tin cậy cho phát hiện nằm trong test, ví dụ, mã sinh hay mã đi mượn"
+        ),
+    )
 
     information = parser.add_argument_group("thông tin")
     information.add_argument(
         "--list-rules", action="store_true", help="in danh mục rule rồi thoát"
+    )
+    information.add_argument(
+        "--explain",
+        metavar="RULE",
+        help="in giải thích đầy đủ của một rule (vì sao nguy hiểm, cách sửa) rồi thoát",
     )
     information.add_argument(
         "--rules-digest", action="store_true", help="in mã băm của bộ rule rồi thoát"
@@ -208,6 +244,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.list_rules:
         sys.stdout.write(rules_catalogue())
+        return EXIT_CLEAN
+    if args.explain:
+        try:
+            sys.stdout.write(rule_explanation(args.explain.strip().upper()))
+        except KeyError:
+            _stderr("fortress-scan: không có rule với mã: %s" % args.explain)
+            return EXIT_USAGE
         return EXIT_CLEAN
     if args.rules_digest:
         sys.stdout.write(rules_digest() + "\n")
@@ -299,9 +342,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # có phát hiện nào" chưa nói lên được điều gì.
     if args.fail_on_coverage_reduction and result.notices:
         return EXIT_FINDINGS
-    highest = result.highest_severity()
-    if highest is not None and highest >= config.fail_on:
-        return EXIT_FINDINGS
+    gate = Confidence.LOW
+    if args.fail_on_confidence:
+        gate = parse_confidence(args.fail_on_confidence)
+    # Ngưỡng thoát soi TỪNG phát hiện: một phát hiện critical nhưng độ tin cậy
+    # thấp không được kéo cả cổng CI xuống nếu người dùng đã nói rõ họ chỉ
+    # chặn theo phát hiện chắc chắn. Lấy mức cao nhất rồi so riêng từng ngưỡng
+    # là trộn hai phát hiện khác nhau thành một cái không tồn tại.
+    for finding in result.findings:
+        if finding.severity >= config.fail_on and finding.confidence >= gate:
+            return EXIT_FINDINGS
     return EXIT_CLEAN
 
 
@@ -426,7 +476,45 @@ def _resolve_config(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
         overrides["include_low_signal_sources"] = True
     if args.no_cross_file:
         overrides["cross_file_analysis"] = False
+    if args.no_context_demotion:
+        overrides["context_awareness"] = False
+    if args.diff:
+        overrides["changed_lines"] = _load_patch(args.diff)
     return config.with_overrides(**overrides), notices
+
+
+def _load_patch(source: str) -> diffscope.ChangedLines:
+    """Đọc unified diff từ tệp hoặc stdin.
+
+    Patch là dữ liệu KHÔNG TIN CẬY như mọi thứ khác trong cây được quét: nó
+    thường do CI sinh ra từ nhánh của người gửi pull request. Nên nó đi qua
+    đúng lối vào có hạn mức của diffscope, và một patch hỏng làm hỏng lượt
+    chạy ngay tại đây -- chứ không âm thầm biến thành "không lọc gì cả", vì
+    đó là kiểu hỏng khiến cổng CI mở toang mà không ai biết.
+    """
+    if source == "-":
+        text = sys.stdin.read(diffscope.MAX_PATCH_BYTES + 1)
+    else:
+        path = Path(source)
+        if not path.is_file():
+            raise ConfigError("không tìm thấy tệp patch: %s" % source)
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise ConfigError("không đọc được tệp patch: %s" % source) from exc
+        if size > diffscope.MAX_PATCH_BYTES:
+            raise ConfigError(
+                "tệp patch lớn bất thường (giới hạn %d byte): %s"
+                % (diffscope.MAX_PATCH_BYTES, source)
+            )
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise ConfigError("không đọc được tệp patch: %s" % source) from exc
+    try:
+        return diffscope.parse_patch(text)
+    except diffscope.DiffError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _project_config_notices(source: Path, data: Dict[str, Any]) -> Tuple[str, ...]:

@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from .diffscope import ChangedLines
 from .model import Confidence, Severity, parse_confidence, parse_severity
 
 DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -82,6 +83,14 @@ class Config:
     respect_vcs_ignore: bool = True
     include_low_signal_sources: bool = False
     cross_file_analysis: bool = True
+    # Hạ độ tin cậy một nấc cho phát hiện nằm ngoài đường chạy sản phẩm
+    # ( test, ví dụ, mã sinh, mã đi mượn ). Tắt đi khi đang cố tình soi
+    # chính những chỗ đó -- ví dụ khi kiểm tra một bộ fixture chạy trên CI.
+    context_awareness: bool = True
+    # Chỉ báo những phát hiện chạm vào dòng đã thay đổi. Rỗng nghĩa là không
+    # lọc; None-vs-rỗng không phân biệt được ở dataclass frozen nên dùng cờ
+    # riêng để "một patch không đổi dòng nào" khác hẳn "không dùng patch".
+    changed_lines: Optional["ChangedLines"] = None
     jobs: int = 1
 
     def with_overrides(self, **overrides: Any) -> "Config":
@@ -116,6 +125,7 @@ _ALLOWED_KEYS = frozenset(
         "respect_vcs_ignore",
         "include_low_signal_sources",
         "cross_file_analysis",
+        "context_awareness",
         "jobs",
     )
 )
@@ -139,6 +149,7 @@ _BOOL_KEYS = frozenset(
         "respect_vcs_ignore",
         "include_low_signal_sources",
         "cross_file_analysis",
+        "context_awareness",
     )
 )
 
@@ -172,6 +183,7 @@ _COVERAGE_KEYS: Tuple[Tuple[str, str], ...] = (
     ("node_budget", "giới hạn ngân sách phân tích"),
     ("token_budget", "giới hạn ngân sách phân tích"),
     ("cross_file_analysis", "tắt phân tích xuyên file"),
+    ("context_awareness", "đổi cách hiệu chỉnh độ tin cậy theo ngữ cảnh tệp"),
 )
 
 

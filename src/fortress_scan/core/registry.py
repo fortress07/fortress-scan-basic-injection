@@ -606,6 +606,97 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
             "trước khi đặt vào header, hoặc encode giá trị theo RFC 5987."
         ),
     ),
+    RuleSpec(
+        id="FSB-CI-001",
+        title="Dữ liệu không tin cậy được dán thẳng vào khối run: của workflow CI",
+        category=Category.COMMAND,
+        severity=Severity.CRITICAL,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-78", "CWE-94"),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "Một biểu thức ${{ ... }} lấy giá trị do người ngoài đặt được -- tiêu đề issue, thân "
+            "comment, tên nhánh của pull request -- và GitHub thay nó vào script TRƯỚC khi shell "
+            "đọc dòng lệnh. Dấu nháy trong workflow không cứu được: kẻ tấn công đóng nháy rồi viết "
+            "tiếp lệnh của mình. Lệnh đó chạy trên runner đang giữ GITHUB_TOKEN và mọi secret của "
+            "job."
+        ),
+        remediation=(
+            "Đưa giá trị qua biến môi trường rồi mới dùng trong shell: khai báo `env: TIEU_DE: "
+            "${{ github.event.issue.title }}` ở bước đó, và trong run: dùng \"$TIEU_DE\". Lúc này "
+            "chuỗi đi vào tiến trình qua môi trường chứ không qua văn bản script, nên không còn "
+            "ranh giới cú pháp nào để phá."
+        ),
+        references=(
+            "https://securitylab.github.com/resources/github-actions-untrusted-input/",
+            "https://docs.github.com/en/actions/security-for-github-actions/security-guides/"
+            "security-hardening-for-github-actions",
+        ),
+    ),
+    RuleSpec(
+        id="FSB-CI-002",
+        title="Dữ liệu không tin cậy được dán vào script inline của một action",
+        category=Category.CODE_EXECUTION,
+        severity=Severity.CRITICAL,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-94",),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "actions/github-script và các action tương tự nhận một đoạn JavaScript rồi eval nó. "
+            "Biểu thức ${{ ... }} được thay vào đoạn mã đó trước khi nó chạy, nên dữ liệu do người "
+            "ngoài đặt trở thành mã chạy với quyền của token trong job."
+        ),
+        remediation=(
+            "Đọc giá trị qua context của chính action ( `context.payload...` ) hoặc qua "
+            "`process.env` sau khi đã gán bằng khối env:, đừng nội suy ${{ ... }} vào thân script."
+        ),
+        references=("https://github.com/actions/github-script#readme",),
+    ),
+    RuleSpec(
+        id="FSB-CI-003",
+        title="Workflow đặc quyền checkout mã của pull request rồi chạy nó",
+        category=Category.SUPPLY_CHAIN,
+        severity=Severity.HIGH,
+        confidence=Confidence.MEDIUM,
+        cwe=("CWE-829", "CWE-94"),
+        owasp=_OWASP_INTEGRITY,
+        description=(
+            "pull_request_target và workflow_run chạy với token ghi được và đọc được secret của "
+            "kho, khác hẳn pull_request thường. Checkout đúng mã của pull request trong một "
+            "workflow như vậy rồi build hay test nó nghĩa là chạy mã của người lạ ở phía trong "
+            "hàng rào -- một script cài đặt hay một bước build là đủ để lấy secret."
+        ),
+        remediation=(
+            "Tách làm hai: workflow pull_request_target chỉ làm việc không cần mã ( gắn nhãn, "
+            "bình luận ), còn việc build/test mã đóng góp thì để workflow pull_request thường lo. "
+            "Nếu buộc phải checkout thì đừng chạy gì từ cây mã đó và đừng đưa secret vào job."
+        ),
+        references=(
+            "https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/",
+        ),
+    ),
+    RuleSpec(
+        id="FSB-CI-004",
+        title="Action của bên thứ ba được tham chiếu bằng nhãn có thể đổi",
+        category=Category.SUPPLY_CHAIN,
+        severity=Severity.MEDIUM,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-829", "CWE-494"),
+        owasp=_OWASP_INTEGRITY,
+        description=(
+            "`uses: chu-so-huu/action@v3` bám vào một tag hoặc một nhánh, mà cả hai đều do bên kia "
+            "di chuyển được bất cứ lúc nào. Ai chiếm được kho đó -- hoặc chính chủ sở hữu đổi ý -- "
+            "sẽ chạy mã mới trên runner của bạn mà không cần bạn sửa một dòng nào."
+        ),
+        remediation=(
+            "Ghim theo digest commit đầy đủ: `uses: chu-so-huu/action@<sha 40 ký tự>  # v3.1.0`. "
+            "Dependabot vẫn nâng cấp được bản ghim này, còn nội dung thì không đổi sau lưng."
+        ),
+        references=(
+            "https://docs.github.com/en/actions/security-for-github-actions/security-guides/"
+            "security-hardening-for-github-actions#using-third-party-actions",
+        ),
+    ),
 )
 
 RULES: Dict[str, RuleSpec] = {rule.id: rule for rule in _RULE_LIST}

@@ -19,6 +19,15 @@ _STYLES: Dict[str, str] = {
     "good": "\x1b[1;32m",
 }
 
+# Ngữ cảnh của tệp, viết cho người đọc chứ không phải cho máy.
+_CONTEXT_LABELS: Dict[str, str] = {
+    "test": "trong phần kiểm thử",
+    "example": "trong ví dụ/mẫu",
+    "generated": "trong mã do máy sinh",
+    "vendored": "trong mã đi mượn",
+    "documentation": "trong tài liệu",
+}
+
 _MARKS: Dict[str, str] = {
     "critical": "CRIT",
     "high": "HIGH",
@@ -77,6 +86,14 @@ class ConsoleReporter:
             finding.confidence.label,
             ", ".join(finding.cwe) if finding.cwe else "không có CWE",
         )
+        # Ngữ cảnh KHÔNG giấu sau -v. Nó là thứ đổi hẳn cách đọc một dòng
+        # phát hiện -- "critical" trong tests/ và "critical" trong app/ đòi
+        # hai phản ứng khác nhau -- nên nó phải nằm ngay cạnh mức độ.
+        if not finding.context.is_production:
+            meta = "%s | %s" % (
+                meta,
+                _CONTEXT_LABELS.get(finding.context.value, finding.context.value),
+            )
         self._write("        %s" % self._paint(meta, "dim"))
         if finding.snippet:
             self._write("        %s" % self._paint(finding.snippet, "dim"))
@@ -93,6 +110,10 @@ class ConsoleReporter:
                         neutralize(step.label),
                     )
                 )
+        if self._verbose and finding.evidence:
+            self._write("        %s" % self._paint("căn cứ:", "dim"))
+            for reason in finding.evidence:
+                self._write("          - %s" % self._paint(neutralize(reason), "dim"))
         if self._verbose and finding.remediation:
             self._write("        %s %s" % (self._paint("khắc phục:", "dim"), finding.remediation))
 

@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List, Optional, Set, Tuple
 
-from ..languages import PYTHON, detect_language, is_scannable_name, language_from_name
+from ..languages import (
+    PYTHON,
+    detect_language,
+    is_scannable_name,
+    language_from_name,
+    language_from_relative,
+)
 from ..security import paths as safe_paths
 from .config import Config
 from .ignore import IgnoreSet
@@ -260,9 +266,14 @@ class Discovery:
         self, path: Path, relative: str, name: Optional[str] = None
     ) -> Optional[DiscoveredFile]:
         label = name or path.name
-        if not is_scannable_name(label):
-            return None
-        language = detect_language(path, label)
+        # Vị trí nói trước tên: một tệp trong .github/workflows là mã CI dù
+        # phần mở rộng của nó chỉ là .yml, và nếu hỏi theo tên trước thì
+        # không bộ nhận dạng nào trả lời được.
+        language = language_from_relative(relative)
+        if language is None:
+            if not is_scannable_name(label):
+                return None
+            language = detect_language(path, label)
         if language is None:
             return None
         if not safe_paths.is_regular_file(path):
