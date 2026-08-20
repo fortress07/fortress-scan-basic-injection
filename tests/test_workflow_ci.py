@@ -235,7 +235,8 @@ def test_action_pinning(reference: str, flagged: bool):
 )
 def test_untrusted_expressions_are_recognised(expression: str):
     verdict = classify_expression(expression)
-    assert verdict is not None and verdict[1] is Confidence.HIGH
+    assert verdict is not None
+    assert verdict[1] is Confidence.HIGH
 
 
 @pytest.mark.parametrize(

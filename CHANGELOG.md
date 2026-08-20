@@ -100,6 +100,21 @@ bằng `[ \t]` ở chỗ hai lớp ký tự chồng lấn nhau, thay `.{0,80}?` 
 alternation không bao giờ được chọn, và gỡ hằng `SHELL_METACHARACTERS` chết ( không nơi nào dùng,
 mà ba nhánh cuối của nó bị chính lớp ký tự đứng đầu che mất ).
 
+### Một chỗ đọc tệp thiếu phép kiểm
+
+Ba cờ nhận đường dẫn đọc vào — `--config`, `--baseline`, `--diff` — mỗi cờ tự kiểm theo một kiểu,
+và một trong ba cái kiểm thiếu. `--baseline` không hỏi "đây có phải tệp thường không", nên
+`--baseline /dev/zero` đi lọt: `stat()` báo kích thước 0 nên qua được hạn mức, rồi `read_text()`
+đọc mãi không hết. Một FIFO còn tệ hơn — lượt quét đứng im vô hạn, không lỗi, không dấu vết, đúng
+kiểu hỏng tệ nhất cho một cổng CI.
+
+Cả ba giờ đi qua `security.paths.validate_input_path()`: phân giải đường dẫn **trước** khi chạm vào
+hệ thống tệp ( nên `..` và liên kết được quy về đích thật rồi mới đem đi kiểm ), bắt buộc là tệp
+thường, và áp hạn mức kích thước. Liên kết do chính người dùng gõ vẫn được đi theo — khác hẳn tệp
+cấu hình mà công cụ tự tìm thấy trong cây bị quét, cái đó do người viết repo đặt nên vẫn bị từ chối.
+
+Đây cũng là chỗ SonarCloud chỉ ra bằng `pythonsecurity:S8707`.
+
 ### Tự siết lại chính mình
 
 Hai bộ đọc mới đều coi đầu vào là **không tin cậy**:
