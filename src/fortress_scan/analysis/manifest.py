@@ -28,19 +28,14 @@ _LIFECYCLE_KEYS = (
 
 _INTERPRETER = r"(?:ba|z|k|da)?sh|python[23]?|perl|ruby|node|pwsh|powershell"
 
-# Ba mẫu dưới đây từng được viết thành MỘT regex mỗi cái, kiểu
-# `\bcurl\b[^;&\n]{0,400}(?:-o|--output)\s*(\S+)[^\n]{0,200}[;&]{1,2}...`.
-# Chúng luôn khớp đúng, nhưng khi KHÔNG khớp thì mỗi vị trí bắt đầu phải thử
-# lại 400 x 200 tổ hợp độ dài. Đo thật: một chuỗi 200 KB gồm toàn "curl -o "
-# tốn 23 giây cho một lần search, và giá đó nhân lên theo từng script vòng
-# đời trong tệp. Đây là từ chối dịch vụ ngay trên công cụ, kích hoạt bằng một
-# package.json mà bất kỳ ai cũng đặt được vào repo họ nhờ ta quét.
+# Ba phép dò dưới đây từng là ba regex, kiểu
+# `\bcurl\b[^;&\n]{0,400}(?:-o|--output)...[;&]{1,2}`. Khi không khớp thì mỗi
+# vị trí bắt đầu phải thử lại 400 x 200 tổ hợp độ dài: đo được 23 giây cho một
+# chuỗi 200 KB toàn "curl -o ", nhân tiếp theo từng script vòng đời trong tệp.
 #
-# Cách chữa giống hệt cách đã chữa looks_like_sql(): thay phép quay lui bằng
-# một lượt quét. Tìm từ khoá bằng alternation của chuỗi cố định ( tuyến tính,
-# không có gì để quay lui ), rồi soi một cửa sổ có chặn trên phía sau nó bằng
-# str.find -- cũng tuyến tính. Kết quả nhận dạng không đổi, thời gian thì từ
-# bậc hai xuống bậc nhất.
+# Chữa giống cách đã chữa looks_like_sql(): tìm từ khoá bằng alternation của
+# chuỗi cố định, rồi soi một cửa sổ có chặn trên phía sau bằng str.find. Cả hai
+# đều tuyến tính, và kết quả nhận dạng không đổi.
 _FETCH_KEYWORD = re.compile(r"(?i)\b(?:curl|wget|iwr|Invoke-WebRequest|fetch)\b")
 _DECODE_KEYWORD = re.compile(
     r"(?i)\b(?:base64\s{1,8}(?:-d|--decode)|atob|FromBase64String)\b"

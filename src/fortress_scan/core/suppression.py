@@ -1,3 +1,28 @@
+"""Đọc chỉ thị `fortress-scan: ignore` nằm trong mã được quét.
+
+Một nguyên tắc chi phối gần như toàn bộ module này: **chỉ thị nằm trong một
+chuỗi không phải là chỉ thị**. Dòng dưới đây trông vô hại với người review
+nhưng lại tắt tiếng cả tệp, và tắt trong im lặng::
+
+    HELP = "# fortress-scan: ignore-file"
+
+Nên trước khi dò chỉ thị, `_mask_string_literals` xoá trắng mọi nội dung nằm
+trong chuỗi. Muốn xoá đúng thì phải biết chuỗi bắt đầu và kết thúc ở đâu, mà
+luật đó khác nhau ở từng ngôn ngữ. Các bảng bên dưới mô tả bốn dạng chuỗi bắc
+qua nhiều dòng, và mỗi bảng khai thiếu một ngôn ngữ là mở lại đúng một đường
+lách:
+
+* chuỗi thường còn mở khi hết dòng (`_SPANNING_QUOTES`);
+* chuỗi nối dòng bằng dấu chéo ngược (`_LINE_CONTINUATION`);
+* heredoc, đóng bằng nhãn do người viết đặt (`_HEREDOC_OPENERS`);
+* chuỗi đóng bằng dấu cố định hoặc bằng thụt lề (`_BRACKET_STRINGS`,
+  `_BLOCK_SCALAR_KEY`).
+
+Bảng dấu mở chú thích chịu cùng luật đó theo chiều ngược lại: nhận nhầm một
+toán tử là dấu mở chú thích thì phần đuôi dòng được phơi ra nguyên vẹn, và
+một hằng chuỗi nằm sau nó lại tắt được cả tệp.
+"""
+
 from __future__ import annotations
 
 import re
@@ -34,19 +59,14 @@ _DIRECTIVE = re.compile(
 
 _MAX_LINES = 200_000
 
-# Bộ mặt nạ chạy NGOÀI Budget của engine, nên nó phải tự mang hạn mức. Không có
-# nó thì một dòng như "${${${... (không có dấu đóng) bắt _scan_to_closer quét
-# lại tới cuối dòng ở từng vị trí một -- O(n^2), và 2 MB mặc định của
-# max_file_bytes đủ để treo lượt quét hàng chục giờ.
+# Bộ mặt nạ chạy ngoài Budget của engine nên phải tự mang hạn mức: một dòng
+# `${${${` không có dấu đóng bắt _scan_to_closer quét lại tới cuối dòng ở từng
+# vị trí, tức là bậc hai.
 #
-# Trên mã thật, việc quét này tuyến tính: đo được nhiều nhất ~1 bước mỗi ký tự
-# (template literal lồng nhau dày đặc 2 MB tốn 0,70 bước/ký tự; JS đã minify
-# 2 MB tốn 0,12; toàn bộ src/ của chính công cụ tốn 42 bước cho 290 KB).
-# Payload tấn công thì tốn 8.000 bước mỗi ký tự.
-#
-# Nên hạn mức đi theo kích thước tệp với hệ số 8 -- rộng gấp tám lần trường hợp
-# hợp lệ nặng nhất, mà vẫn chặn payload ngay: tệp 16 KB chỉ được tiêu 128 nghìn
-# bước thay vì 128 triệu. Trần cứng giữ cho tệp 2 MB không vượt quá ~1,6 giây.
+# Đo trên mã thật thì việc quét này tuyến tính, nhiều nhất khoảng 1 bước mỗi ký
+# tự; payload tấn công tốn 8.000 bước mỗi ký tự. Nên hạn mức đi theo kích thước
+# tệp với hệ số 8: rộng gấp tám lần trường hợp hợp lệ nặng nhất mà vẫn chặn
+# payload ngay.
 _MASK_STEPS_PER_CHAR = 8
 _MIN_MASK_STEPS = 100_000
 _MAX_MASK_STEPS = 5_000_000
@@ -75,22 +95,11 @@ class _MaskBudget:
         if self._remaining <= 0:
             raise _MaskExhausted
 
-# Chỉ thị nằm trong một chuỗi không phải là chỉ thị. Một dòng như
-# HELP = "# fortress-scan: ignore-file" trông vô hại với người đọc nhưng lại
-# tắt cả tệp, và im lặng -- nên nội dung chuỗi bị xoá trắng trước khi dò.
-#
-# Dấu mở chú thích phải tra theo TỪNG ngôn ngữ. Một danh sách gộp chung là lỗ
-# hổng thật, vì mỗi dấu trong đó lại là toán tử hợp lệ ở một ngôn ngữ khác:
-# `//` là phép chia nguyên của Python, `--` là toán tử giảm của JS/Java/C#/PHP,
-# `#` là trường riêng tư của JavaScript. Gặp một trong số đó, _mask_line kết
-# luận "chú thích bắt đầu từ đây" và GIỮ NGUYÊN phần còn lại của dòng -- kể cả
-# một hằng chuỗi nằm sau nó. Thế là dòng
-#     mid = (lo + hi) // 2 ; NOTE = "# fortress-scan: ignore-file"
-# tắt sạch phát hiện của cả tệp, dù trong đó không có lấy một chú thích nào và
-# người review đọc qua cũng không thấy gì bất thường.
-#
-# `--` chỉ có mặt ở Lua, nơi nó thật sự mở chú thích. Ở mọi ngôn ngữ khác nó
-# là toán tử giảm, nên khai nó ở đó chỉ còn tác dụng làm đường lách.
+# Tra theo từng ngôn ngữ, vì mỗi dấu ở đây lại là toán tử hợp lệ ở ngôn ngữ
+# khác: `//` là phép chia nguyên của Python, `--` là toán tử giảm của
+# JS/Java/C#/PHP, `#` là trường riêng tư của JavaScript. Nhận nhầm một trong số
+# đó thì `mid = (lo + hi) // 2 ; NOTE = "# fortress-scan: ignore-file"` tắt
+# sạch cả tệp. `--` chỉ có mặt ở Lua, nơi nó thật sự mở chú thích.
 _LINE_COMMENTS: Dict[str, Tuple[str, ...]] = {
     PYTHON: ("#",),
     JAVASCRIPT: ("//",),
@@ -117,19 +126,12 @@ _LINE_COMMENTS: Dict[str, Tuple[str, ...]] = {
 _WORD_START_LINE_COMMENTS: FrozenSet[str] = frozenset({SHELL})
 
 # Chú thích khối phải được đóng lại chứ không nuốt trọn phần đuôi dòng: sau
-# `*/` là mã thật, và mã thật thì có thể chứa chuỗi. Bỏ qua chuyện đó thì
-# `/* ghi chú */ NOTE = "# fortress-scan: ignore-file"` lại là một đường lách y
-# hệt trường hợp trên.
+# `*/` là mã thật, và mã thật thì chứa được chuỗi.
 #
-# `<!--` KHÔNG có mặt ở đây, dù `.jsp`, `.erb`, `.phtml`, `.cshtml`, `.aspx`,
-# `.vue` và `.svelte` đều là tệp lai HTML. Lý do: `a <!--b` là biểu thức hợp lệ
-# trong Java, C#, JavaScript và PHP (`a < !(--b)`), nên nhận `<!--` làm dấu mở
-# chú thích lại mở đúng đường lách vừa bịt.
-#
-# Bỏ nó đi không làm mất chỉ thị thật, vì bảng này KHÔNG phải là thứ cho phép
-# một chỉ thị chạy: _mask_line chép nguyên văn mọi ký tự không nằm trong chuỗi,
-# nên `<!-- fortress-scan: ignore-file -->` vẫn tới được bộ dò như thường. Bảng
-# này chỉ quyết định một chuyện: có phơi nguyên phần đuôi dòng ra hay không.
+# `<!--` vắng mặt dù nhiều tệp lai HTML dùng nó, vì `a <!--b` là biểu thức hợp
+# lệ trong Java, C#, JavaScript và PHP. Bỏ nó đi không làm mất chỉ thị thật:
+# bảng này chỉ quyết định có phơi phần đuôi dòng ra hay không, còn
+# `<!-- fortress-scan: ignore-file -->` vẫn tới được bộ dò như thường.
 _C_COMMENT: Tuple[str, str] = ("/*", "*/")
 _BLOCK_COMMENTS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     PYTHON: (),
@@ -159,22 +161,12 @@ _BLOCK_COMMENTS: Dict[str, Tuple[Tuple[str, str], ...]] = {
 _DEFAULT_LINE_COMMENTS: Tuple[str, ...] = ("//", "#")
 _DEFAULT_BLOCK_COMMENTS: Tuple[Tuple[str, str], ...] = (_C_COMMENT,)
 
-# Dấu nháy nào giữ chuỗi MỞ khi hết dòng -- tra theo từng ngôn ngữ, vì đây là
-# chỗ mỗi ngôn ngữ một luật. Một danh sách gộp chung ( "chỉ backtick mới bắc
-# qua dòng" ) là một đường lách thật, cùng họ với danh sách dấu mở chú thích
-# gộp chung ở trên.
+# Dấu nháy nào giữ chuỗi mở khi hết dòng. Bộ mặt nạ đóng chuỗi ở cuối dòng,
+# nên khai thiếu ở đây là để dòng kế tiếp ( vẫn nằm trong chuỗi theo cách ngôn
+# ngữ thật đọc nó ) rơi ra đọc như mã, và một dấu `#` ở đó tắt cả tệp.
 #
-# Bộ mặt nạ đóng chuỗi ở cuối dòng, nên dòng KẾ TIẾP -- vẫn nằm trong chuỗi
-# theo cách ngôn ngữ thật đọc nó -- được đem ra đọc như mã. Ở đó một dấu `#`
-# hay `//` mở ra một "chú thích", và cả tệp tắt tiếng:
-#     $note = "tài liệu
-#     # fortress-scan: ignore-file";
-# Không dòng nào ở trên là chú thích: với PHP đó là một chuỗi hai dòng.
-#
-# Chuỗi "..." và '...' của PHP, Ruby và shell bắc qua dòng mà không cần dấu gì
-# thêm. C# thì có chuỗi nguyên văn `@"..."`; ở đây không cần nhận ra tiền tố
-# `@`, vì một chuỗi C# bình thường luôn đóng ngay trong dòng của nó -- cờ này
-# chỉ có tác dụng đúng lúc chuỗi còn mở khi hết dòng.
+# C# có chuỗi nguyên văn `@"..."` nhưng không cần nhận tiền tố `@`: cờ này chỉ
+# có tác dụng đúng lúc chuỗi còn mở khi hết dòng.
 _SPANNING_QUOTES: Dict[str, FrozenSet[str]] = {
     PYTHON: frozenset(),
     JAVASCRIPT: frozenset("`"),
@@ -205,28 +197,17 @@ _SPANNING_QUOTES: Dict[str, FrozenSet[str]] = {
 }
 _DEFAULT_SPANNING_QUOTES: FrozenSet[str] = frozenset("`")
 
-# Ngôn ngữ mà một dấu gạch chéo ngược ở cuối dòng nuốt luôn ký tự xuống dòng
-# và giữ chuỗi mở sang dòng sau. Cùng một đường lách với bảng trên, chỉ tốn
-# thêm đúng một ký tự:
-#     NOTE = "tài liệu \
-#     # fortress-scan: ignore-file"
-# CPython đọc cả hai dòng thành một chuỗi duy nhất.
+# Ngôn ngữ mà dấu chéo ngược cuối dòng nuốt luôn ký tự xuống dòng và giữ chuỗi
+# mở sang dòng sau. Cùng một đường lách với bảng trên, chỉ tốn thêm một ký tự.
 _LINE_CONTINUATION: FrozenSet[str] = frozenset(
     {PYTHON, JAVASCRIPT, TYPESCRIPT, SHELL}
 )
 
-# Heredoc: dạng chuỗi nhiều dòng thứ ba, và là dạng tự nhiên nhất để viết một
-# đoạn văn bản dài trong PHP, Ruby hay shell. Không mô tả nó thì toàn bộ thân
-# heredoc được đọc như mã, nên
-#     $note = <<<EOT
-#     # fortress-scan: ignore-file
-#     EOT;
-# lại tắt cả tệp.
-#
-# Nhãn có thể đặt trong nháy ( nowdoc của PHP, `<<~'EOT'` của Ruby, `<<'EOF'`
-# của shell ). Riêng Ruby, `<<` trần còn là toán tử dịch trái và phép nối mảng,
-# nên nhánh không có `-`/`~` chỉ nhận nhãn viết hoa -- đúng quy ước heredoc và
-# đủ để `arr << item` không bị hiểu nhầm.
+# Heredoc là dạng chuỗi nhiều dòng thứ ba, và là cách tự nhiên nhất để viết
+# một đoạn văn bản dài trong PHP, Ruby hay shell. Nhãn đặt được trong nháy
+# ( nowdoc của PHP, `<<~'EOT'` của Ruby ). Riêng Ruby và Perl, `<<` trần còn là
+# toán tử dịch trái, nên nhánh không có `-`/`~` chỉ nhận nhãn viết hoa để
+# `arr << item` không bị hiểu nhầm.
 _HEREDOC_LABEL = r"[A-Za-z_][A-Za-z0-9_]*"
 
 # Ba cách viết nhãn heredoc: "EOT", 'EOT' ( nowdoc, không nội suy ) và EOT trần.
@@ -238,40 +219,60 @@ _HEREDOC_NAME = r"(?:\"(?P<dq>%s)\"|'(?P<sq>%s)'|\\?(?P<bare>%s))" % (
 
 _HEREDOC_OPENERS: Dict[str, "re.Pattern[str]"] = {
     PHP: re.compile(r"<<<[ \t]*" + _HEREDOC_NAME),
-    # Nhánh có `-`/`~` nhận nhãn bất kỳ. Nhánh `<<` trần chỉ nhận nhãn viết
-    # hoa, vì ở Ruby `<<` còn là toán tử dịch trái và phép nối mảng --
-    # `arr << item` không được biến thành một heredoc nuốt trọn phần đuôi tệp.
+    # Nhánh có `-`/`~` nhận nhãn bất kỳ. Nhánh `<<` trần nhận nhãn viết
+    # thường lẫn viết hoa, vì Ruby cũng nhận: `<<eot` là một heredoc thật.
+    # Thứ tách nó khỏi toán tử dịch trái là KHOẢNG TRẮNG chứ không phải kiểu chữ:
+    # `arr << item` có dấu cách nên không khớp, còn `arr <<item` thì chính Ruby
+    # cũng đọc là heredoc. Đòi viết hoa chỉ còn tác dụng làm đường lách.
     RUBY: re.compile(
         r"<<(?P<squiggly>[-~])[ \t]*" + _HEREDOC_NAME
-        + r"|<<(?P<upper>[A-Z_][A-Za-z0-9_]*)"
+        + r"|<<(?P<plain>[A-Za-z_][A-Za-z0-9_]*)"
     ),
     SHELL: re.compile(r"<<(?!<)(?P<dash>-)?[ \t]*" + _HEREDOC_NAME),
-    # Perl dùng cùng cú pháp với shell, và mang cùng chỗ mập mờ với Ruby:
-    # `<<` cũng là toán tử dịch trái. Nhãn đặt trong nháy thì nhận luôn, còn
-    # nhãn trần chỉ nhận khi viết hoa, đúng quy ước heredoc và đủ để `$x << 2`
-    # không nuốt trọn phần đuôi tệp.
+    # Perl dùng cùng cú pháp với shell và mang cùng chỗ mập mờ với Ruby.
+    # Nhãn trần ở đây nhận mọi kiểu chữ và phải dính liền sau `<<`, vì đó
+    # đúng là cách Perl phân biệt heredoc với phép dịch trái. `<<eot` viết
+    # thường là heredoc hợp lệ ( đã chạy thử trên perl 5.42 ), nên bắt nhãn phải
+    # viết hoa là để ngỏ một đường tắt tiếng cả tệp: thân heredoc bị đọc
+    # như mã, và một dấu `#` trong đó mang theo `ignore-file`.
     PERL: re.compile(
         r"<<(?P<squiggly>~)?[ \t]*(?:\"(?P<dq>%s)\"|'(?P<sq>%s)')"
-        r"|<<(?P<upper>[A-Z_][A-Za-z0-9_]*)" % (_HEREDOC_LABEL, _HEREDOC_LABEL)
+        r"|<<(?P<tilde>~)?(?P<plain>[A-Za-z_][A-Za-z0-9_]*)"
+        % (_HEREDOC_LABEL, _HEREDOC_LABEL)
     ),
 }
 
-# Chuỗi nhiều dòng có dấu đóng CỐ ĐỊNH, không có nhãn do người viết đặt. Đây
-# là dạng thứ tư của cùng một họ lỗ hổng đã vá cho heredoc: dòng nằm giữa
-# trông như dữ liệu với người review, nhưng nếu bộ mặt nạ đọc nó như mã thì
-# một dấu `#` hay `--` ở đầu dòng mở ra một "chú thích", và cả tệp tắt tiếng.
-#
-#     local tai_lieu = [[
-#     -- fortress-scan: ignore-file
-#     ]]
-#
-# Không dòng nào ở trên là chú thích: với Lua đó là một chuỗi ba dòng.
-#
-# Dấu mở dài đứng trước dấu ngắn để `[=[` không bị `[[` cướp mất.
+# Dạng thứ tư: chuỗi nhiều dòng đóng bằng dấu CỐ ĐỊNH, không có nhãn do người
+# viết đặt. Dấu mở dài đứng trước dấu ngắn để `[=[` không bị `[[` cướp mất.
 _BRACKET_STRINGS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     LUA: (("[==[", "]==]"), ("[=[", "]=]"), ("[[", "]]")),
     POWERSHELL: (('@"', '"@'), ("@'", "'@")),
 }
+
+# Dạng thứ năm, và là dạng duy nhất mà NGƯỜI VIẾT tự chọn lấy dấu đóng:
+# `%q{...}` của Ruby và `q(...)` của Perl đều là hằng chuỗi. Không mô tả chúng
+# thì ruột của chúng được đọc như mã, nên
+#
+#     n = %q{# fortress-scan: ignore-file}
+#
+# tắt sạch phát hiện của cả tệp, dù trong Ruby dòng đó không có lấy một chú
+# thích nào: đó là một chuỗi.
+#
+# Dấu mở đứng ngay sau tên dạng, và ký tự đó QUYẾT ĐỊNH dấu đóng: bốn cặp
+# ngoặc đóng bằng ngoặc đối ứng ( và lồng nhau được ), mọi ký tự khác đóng
+# bằng chính nó.
+#
+# Lookbehind giữ cho toán tử chia lấy dư và tên biến không bị nhận nhầm:
+# `a % b` có dấu cách nên rơi ra ngoài, `x%2` có chữ số nên cũng vậy, còn
+# `$q->param(...)` của Perl bị chặn bởi `$` đứng trước.
+_PERCENT_STRINGS: Dict[str, "re.Pattern[str]"] = {
+    RUBY: re.compile(r"(?<![\w)\]}])%[qQwWiIrsx]?(?P<delim>[^\s\w=])"),
+    PERL: re.compile(r"(?<![\w$@%&>-])(?:qq|qw|qr|q)[ 	]{0,2}(?P<delim>[^\s\w])"),
+}
+
+# Ngoặc mở thì đóng bằng ngoặc đối ứng và đếm được độ sâu; ký tự khác đóng
+# bằng chính nó, và khi đó không có chuyện lồng nhau.
+_PERCENT_PAIRS: Dict[str, str] = {"(": ")", "[": "]", "{": "}", "<": ">"}
 
 # Khối scalar của YAML: `mo_ta: |` hoặc `- run: >-`. Phần thân đóng bằng thụt
 # lề chứ không bằng một dấu đóng, nên nó cần một cơ chế riêng.
@@ -284,7 +285,7 @@ _BLOCK_SCALAR_KEY = re.compile(
 # 7.3 trở đi cũng vậy. Nhận dư một dòng kết thúc là đóng heredoc SỚM hơn thật,
 # tức là phơi phần đuôi ra làm mã -- nên chỉ bật cờ này đúng ở nơi ngôn ngữ
 # thật sự cho phép.
-_HEREDOC_INDENT_GROUPS: Tuple[str, ...] = ("squiggly", "dash")
+_HEREDOC_INDENT_GROUPS: Tuple[str, ...] = ("squiggly", "dash", "tilde")
 _HEREDOC_INDENTED_ALWAYS: FrozenSet[str] = frozenset({PHP})
 
 _HEREDOC_LABEL_CHARS = frozenset(
@@ -305,6 +306,7 @@ class _CommentSyntax:
     heredoc_indented: bool = False
     brackets: Tuple[Tuple[str, str], ...] = ()
     block_scalars: bool = False
+    percent: Optional["re.Pattern[str]"] = None
 
 
 def comment_syntax(language: Optional[str]) -> _CommentSyntax:
@@ -320,6 +322,7 @@ def comment_syntax(language: Optional[str]) -> _CommentSyntax:
         language in _HEREDOC_INDENTED_ALWAYS,
         _BRACKET_STRINGS.get(language, ()),
         language in _BLOCK_SCALAR_LANGUAGES,
+        _PERCENT_STRINGS.get(language),
     )
 
 
@@ -408,12 +411,18 @@ class _Region:
     # sâu hơn con số này còn thuộc về nó. -1 nghĩa là vùng này không phải khối
     # YAML.
     scalar_indent: int = -1
+    # Dấu MỞ của vùng, chỉ đặt cho chuỗi phần trăm dùng cặp ngoặc. Có nó
+    # thì `%q{a{b}c}` đếm được độ sâu và đóng đúng ở dấu cuối; rỗng nghĩa
+    # là vùng đóng ngay ở dấu đóng đầu tiên, y như trước.
+    nest: str = ""
 
 
 Pending = _Region
 
 
-def _find_string_end(raw: str, index: int, delimiter: str, budget: _MaskBudget) -> int:
+def _find_string_end(
+    raw: str, index: int, delimiter: str, budget: _MaskBudget, nest: str = ""
+) -> int:
     """Vị trí dấu đóng THẬT của một vùng chuỗi, tôn trọng dấu thoát.
 
     `str.find` trần là một đường lách. Trong chuỗi ba nháy của Python, một dấu
@@ -428,14 +437,23 @@ def _find_string_end(raw: str, index: int, delimiter: str, budget: _MaskBudget) 
     vượt quá độ dài và vùng được giữ mở sang dòng sau -- đúng như ngôn ngữ đọc.
     """
     cursor = index
+    depth = 1
     length = len(raw)
     while cursor < length:
         budget.spend()
         if raw[cursor] == "\\":
             cursor += 2
             continue
+        if nest and raw.startswith(nest, cursor):
+            depth += 1
+            cursor += len(nest)
+            continue
         if raw.startswith(delimiter, cursor):
-            return cursor
+            depth -= 1
+            if depth == 0:
+                return cursor
+            cursor += len(delimiter)
+            continue
         cursor += 1
     return -1
 
@@ -454,7 +472,7 @@ def _close_region(
     if region.keep:
         end = raw.find(delimiter, index)
     else:
-        end = _find_string_end(raw, index, delimiter, budget)
+        end = _find_string_end(raw, index, delimiter, budget, region.nest)
     if end < 0:
         body = raw[index:] if region.keep else " " * (len(raw) - index)
         return body, len(raw), region
@@ -585,6 +603,26 @@ def _starts_bracket_string(
     return None
 
 
+def _starts_percent_string(
+    raw: str, index: int, syntax: _CommentSyntax
+) -> Optional[Tuple[str, str, str]]:
+    """Chuỗi phần trăm mở ra tại đúng vị trí này: (phần mở, dấu đóng, dấu lồng).
+
+    Dấu đóng do chính người viết chọn, nên nó phải đọc ra từ dòng chứ không
+    tra được trong bảng. Bốn cặp ngoặc lồng nhau được nên trả về thêm dấu mở;
+    mọi ký tự khác đóng bằng chính nó và không có độ sâu để đếm.
+    """
+    if syntax.percent is None:
+        return None
+    match = syntax.percent.match(raw, index)
+    if match is None:
+        return None
+    delimiter = match.group("delim")
+    closer = _PERCENT_PAIRS.get(delimiter, delimiter)
+    nest = delimiter if closer != delimiter else ""
+    return match.group(0), closer, nest
+
+
 def _closes_heredoc(raw: str, region: _Region) -> bool:
     """Dòng này có đúng là dòng kết thúc heredoc không.
 
@@ -640,6 +678,18 @@ def _mask_line(
             pieces.append(bracket[0])
             text, index, pending = _close_region(
                 raw, index + len(bracket[0]), _Region(bracket[1], False), budget
+            )
+            pieces.append(text)
+            continue
+        percent = _starts_percent_string(raw, index, syntax)
+        if percent is not None:
+            head, closer, nest = percent
+            pieces.append(head)
+            text, index, pending = _close_region(
+                raw,
+                index + len(head),
+                _Region(closer, False, nest=nest),
+                budget,
             )
             pieces.append(text)
             continue

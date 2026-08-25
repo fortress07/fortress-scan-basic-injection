@@ -23,19 +23,14 @@ _PATTERNS: Tuple[Pattern[str], ...] = (
         r"(?i)\b(?:pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key)\b\s*[:=]\s*"
         r"([^\s'\";,)\]}]{8,120})"
     ),
-    # Phần tên giao thức CÓ CHẶN TRÊN, và đó không phải chuyện thẩm mỹ. Bản cũ
-    # viết `[a-z][a-z0-9+.\-]*://`: lớp ký tự đó nuốt được cả chữ, số và dấu
-    # chấm, còn `:` thì không nằm trong nó -- nên trên một chuỗi dài không có
-    # `://` nào, bộ máy quét tới cuối rồi lùi từng ký tự một để tìm dấu hai
-    # chấm, và làm lại như vậy ở MỌI vị trí bắt đầu. Bậc hai.
+    # Tên giao thức có chặn trên, và đó không phải chuyện thẩm mỹ. Bản cũ viết
+    # `[a-z][a-z0-9+.\-]*://`, mà lớp ký tự đó nuốt được chữ, số và dấu chấm
+    # còn `:` thì không, nên trên chuỗi dài không có `://` bộ máy quét tới cuối
+    # rồi lùi từng ký tự, lặp lại ở mọi vị trí bắt đầu. Đo được 3,0 giây cho
+    # 32 KB, và redact() chạy trên từng dòng của mọi phát hiện.
     #
-    # Đo thật: 32 KB chuỗi dạng "eyJA.A.A..." tốn 3,0 giây cho một lần search,
-    # và tăng gấp 16 lần kích thước thì tốn gấp 276 lần thời gian. Một tệp
-    # JavaScript đã minify 2 MB nằm trên một dòng là đủ để treo lượt quét hàng
-    # giờ -- mà redact() chạy trên đúng những dòng đó, cho mọi phát hiện.
-    #
-    # Tên giao thức dài nhất từng đăng ký với IANA chưa tới 30 ký tự, nên chặn
-    # ở 30 không bỏ sót gì mà biến phép quay lui thành hằng số.
+    # Tên giao thức dài nhất IANA từng đăng ký chưa tới 30 ký tự, nên chặn ở 30
+    # không bỏ sót gì mà biến phép quay lui thành hằng số.
     re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,30}://[^\s/@]+:([^\s/@]{3,120})@"),
 )
 

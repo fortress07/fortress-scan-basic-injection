@@ -389,15 +389,13 @@ def rule_explanation(rule_id: str) -> str:
 
 
 def _escape(text: str) -> str:
-    # neutralize() trước cả escape cú pháp: | < > chỉ giữ cho bảng Markdown
-    # không vỡ, còn escape sequence của terminal thì đi xuyên qua nguyên vẹn và
-    # nổ ra khi ai đó cat tệp .md hoặc để CI in nó vào log. JSON và SARIF thoát
-    # nạn này nhờ json.dumps, Markdown thì không có ai lo hộ.
+    # neutralize() chạy trước cả escape cú pháp. Escape sequence của terminal đi
+    # xuyên qua `|` `<` `>` nguyên vẹn rồi nổ ra khi ai đó cat tệp .md; JSON và
+    # SARIF thoát nạn nhờ json.dumps, Markdown thì không có ai lo hộ.
     #
-    # ` [ ] đi kèm vì chúng cũng là cú pháp: một dấu ` lẻ mở ra vùng mã và nuốt
-    # phần sau nó, còn [chữ](http://...) là một liên kết thật trong báo cáo mà
-    # người đọc tưởng do công cụ viết ra. Dấu gạch chéo ngược ở đây vô hình khi
-    # render, nên không đánh đổi gì về mặt đọc.
+    # Backtick và ngoặc vuông đi kèm vì chúng cũng là cú pháp: một backtick lẻ
+    # mở ra vùng mã và nuốt phần sau, còn `[chữ](http://...)` là một liên kết
+    # thật mà người đọc tưởng do công cụ viết ra.
     escaped = neutralize(text).replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;")
     return escaped.replace("`", "\\`").replace("[", "\\[").replace("]", "\\]")
 

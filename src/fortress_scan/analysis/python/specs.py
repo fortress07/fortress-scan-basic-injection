@@ -1062,21 +1062,14 @@ SQL_STATEMENT = re.compile(
     r"union\s+(?:all\s+)?select\b|truncate\s+table\b|merge\s+into\b|with\s+\w+\s+as\s*\()"
 )
 
-# `select\s+.+?\bfrom\b` là lazy dot-star: trên chuỗi vài MB chứa "select" mà
-# không có "from", nó quét lại phần đuôi tại MỖI vị trí select - bậc hai, đo
-# thực tế trên 2 MB là không bao giờ quay lại. Budget của engine chỉ đếm
-# node/token nên không chặn được.
+# Nhánh `select ... from` không viết thành regex. `select\s+.+?\bfrom\b` là
+# lazy dot-star: trên chuỗi vài MB có "select" mà không có "from", nó quét lại
+# phần đuôi ở mỗi vị trí select, tức là bậc hai.
 #
-# Cắt cụt đầu vào thì hết treo nhưng SINH ÂM TÍNH GIẢ: một câu SELECT liệt kê
-# 40 cột đã dài hơn 600 ký tự trước khi tới FROM, và với sink require_sql của
-# bộ phân tích generic ( Java queryForObject, Go db.Query... ) không nhận ra
-# SQL nghĩa là BỎ HẲN phát hiện. Với một công cụ SAST, bỏ sót lỗ hổng đắt hơn
-# quét chậm.
-#
-# Nên thay vì cắt: quét MỘT LƯỢT các từ khóa như token. Alternation của hai
-# chuỗi cố định không có gì để quay lui, nên độ phức tạp tuyến tính thật sự -
-# 2 MB payload thù địch đo được ~0.25s thay vì không bao giờ xong, mà câu
-# SELECT dài bao nhiêu cũng vẫn nhận đúng.
+# Cắt cụt đầu vào thì hết treo nhưng sinh âm tính giả, vì một câu SELECT liệt
+# kê 40 cột đã dài hơn 600 ký tự trước khi tới FROM. Thay vào đó là quét một
+# lượt các từ khoá như token: alternation của hai chuỗi cố định không có gì để
+# quay lui, đo được 0,25 giây cho 2 MB payload thù địch.
 _SELECT_OR_FROM = re.compile(r"(?i)\b(select|from)\b")
 
 # Chặn trên cho MỘT lần gọi. Tuyến tính rồi thì đây chỉ là lưới an toàn cuối

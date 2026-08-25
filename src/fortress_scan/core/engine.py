@@ -91,6 +91,26 @@ def scan(
             )
         )
 
+    # Cạn hạn mức so khớp nghĩa là từ một điểm nào đó trở đi, quy tắc ignore
+    # ngừng có hiệu lực. Không giấu gì cả là hướng an toàn, nhưng nó làm phạm
+    # vi quét khác hẳn thứ người viết repo mô tả, nên phải nói ra.
+    if discovery.ignore_budget_exhausted:
+        coverage_notices.append(
+            ScanNotice(
+                kind="ignore-budget-exhausted",
+                summary=(
+                    "quy tắc bỏ qua trong cây được quét tốn quá nhiều công so khớp "
+                    "nên đã bị ngừng áp dụng giữa chừng; từ đó trở đi không tệp nào "
+                    "bị ẩn khỏi lượt quét"
+                ),
+                details=(
+                    "một .gitignore hay .fortress-scanignore dựng riêng để làm chậm "
+                    "lượt quét sẽ chạm vào đây; chạy lại với --no-vcs-ignore "
+                    "--no-ignore-files nếu không tin cây này",
+                ),
+            )
+        )
+
     if discovery.skipped_links:
         coverage_notices.append(
             ScanNotice(

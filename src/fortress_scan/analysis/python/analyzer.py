@@ -9,6 +9,7 @@ from ...core.budget import Budget, BudgetExceeded
 from ...core.config import Config
 from ...core.model import Category, Confidence, Finding, StepKind
 from ...languages import PYTHON
+from ...security.text import neutralize
 from ..base import Analyzer, AnalysisUnit, FindingBuilder
 from . import specs
 from .imports import ImportResolver, attribute_parts, dotted_name
@@ -106,6 +107,23 @@ class FunctionInfo:
     origin_path: str = ""
 
 
+def _parse_filename(relative_path: str) -> str:
+    r"""Tên tệp đưa cho ast.parse, đã trung hoà ký tự điều khiển.
+
+    Tên này KHÔNG chỉ nằm trong thông báo lỗi mà ta tự bắt: CPython in nó
+    thẳng ra stderr khi mã được quét sinh ra một SyntaxWarning ( ví dụ
+    `x = "\d"` ), và đường đó không đi qua _stderr() nên không ai trung hoà
+    hộ. Tên tệp thì do người viết cây thư mục đặt.
+
+    Hệ quả là một tệp đặt tên kèm chuỗi thoát ANSI ghi đè được nội dung
+    terminal của người chạy, còn U+202E ( RIGHT-TO-LEFT OVERRIDE, hợp lệ trong
+    tên tệp trên cả Windows lẫn Linux ) đảo ngược đoạn tên hiển thị. Đúng thứ
+    mà họ rule FSB-UNI của chính công cụ này tồn tại để bắt, nên nó không được
+    phép đi ra từ chính công cụ.
+    """
+    return neutralize(relative_path)
+
+
 class PythonAnalyzer(Analyzer):
     name = "python-taint"
     languages = (PYTHON,)
@@ -117,7 +135,7 @@ class PythonAnalyzer(Analyzer):
         project: Optional["ProjectIndex"] = None,
     ) -> List[Finding]:
         try:
-            tree = ast.parse(unit.source, filename=unit.relative_path)
+            tree = ast.parse(unit.source, filename=_parse_filename(unit.relative_path))
         except (SyntaxError, ValueError, MemoryError, RecursionError) as exc:
             raise UnparsableSource(str(exc)) from exc
         module = ModuleAnalysis(unit, budget, project)
@@ -136,7 +154,7 @@ class PythonAnalyzer(Analyzer):
         parse cho tệp này, pha thu thập không cần nói lại.
         """
         try:
-            tree = ast.parse(source, filename=relative_path)
+            tree = ast.parse(source, filename=_parse_filename(relative_path))
         except (SyntaxError, ValueError, MemoryError, RecursionError):
             return None
         unit = AnalysisUnit(
@@ -479,15 +497,12 @@ class Evaluator:
             self._eval(node.test, env)
             if node.msg is not None:
                 self._eval(node.msg, env)
-            # `assert ten in CHO_PHEP` nói đúng điều mà `if ten not in
-            # CHO_PHEP: raise` nói, và đó là cách viết kiểm tra rất phổ biến
-            # trong mã nội bộ. Không đọc nó thì cả một họ cách viết ĐÚNG bị
-            # báo nhầm, và báo nhầm đúng vào chỗ tác giả đã cẩn thận.
+            # `assert ten in CHO_PHEP` nói đúng điều mà `if ten not in CHO_PHEP:
+            # raise` nói, và là cách viết rất phổ biến trong mã nội bộ.
             #
-            # Vẫn còn một khác biệt thật: `python -O` gỡ bỏ assert, nên phép
-            # kiểm biến mất trong bản chạy tối ưu. Đó là một khuyết điểm về
-            # cách viết chứ không phải một đường injection đã dựng được, và
-            # gộp hai chuyện đó vào một phát hiện thì cả hai đều mờ đi.
+            # `python -O` gỡ bỏ assert nên phép kiểm biến mất trong bản chạy
+            # tối ưu. Đó là khuyết điểm về cách viết, không phải một đường
+            # injection đã dựng được, nên nó không đi vào phát hiện này.
             positive, _ = _guarded_names(node.test)
             _apply_guards(env, positive)
             return env

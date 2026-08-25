@@ -27,20 +27,13 @@ FOREIGN_NODE = object()
 MAX_INDEX_MODULES = 5000
 MAX_INDEX_FUNCTIONS = 20000
 
-# Tên trần trùng với một builtin thì KHÔNG BAO GIỜ được tra qua chỉ mục dự án.
-#
-# `map(...)` trong một tệp không import `map` là builtin, chứ không phải
-# `Style.map` của tkinter/ttk.py. Trước đây chỉ mục vẫn nối hai thứ đó, và vì
-# summary của `Style.map` nói giá trị trả về chỉ sinh ra từ tham số của NÓ,
-# taint thật mang theo đối số bị vứt: chuỗi socket -> fileConfig -> eval trong
-# logging/config.py tụt từ FSB-EXEC-001 ( có vết nhiễm, kèm đường đi ) xuống
-# FSB-EXEC-002 ( chỉ "giá trị không phải hằng" ) - tức bật phân tích xuyên
-# file lại làm phát hiện YẾU đi. Đối chiếu cả stdlib còn thấy `str` nối về
-# locale.py, `set` về Treeview.set, `filter` về Filterer.filter.
-#
-# Hàm người dùng tự đặt trùng tên builtin vẫn hoạt động bình thường: lời gọi
-# `from helpers import map` rồi `map(...)` được ImportMap phân giải thành
-# `helpers.map` nên đi đường dotted, không đụng bảng tên trần này.
+# Tên trần trùng một builtin thì không bao giờ được tra qua chỉ mục dự án.
+# `map(...)` trong tệp không import `map` là builtin, chứ không phải `Style.map`
+# của tkinter. Nối nhầm hai thứ đó làm taint thật bị vứt, và phát hiện tụt từ
+# FSB-EXEC-001 xuống FSB-EXEC-002: bật phân tích xuyên file lại làm kết quả yếu
+# đi. Hàm người dùng tự đặt trùng tên builtin vẫn chạy bình thường, vì
+# `from helpers import map` được phân giải thành `helpers.map` nên đi đường
+# dotted.
 _BUILTIN_NAMES: FrozenSet[str] = frozenset(dir(builtins))
 
 

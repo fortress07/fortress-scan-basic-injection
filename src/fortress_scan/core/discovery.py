@@ -16,7 +16,7 @@ from ..languages import (
 )
 from ..security import paths as safe_paths
 from .config import Config
-from .ignore import IgnoreSet
+from .ignore import IgnoreSet, MatchBudget
 from .model import ScanError
 
 IGNORE_FILENAMES: Tuple[str, ...] = (".fortress-scanignore",)
@@ -44,8 +44,16 @@ class Discovery:
         self._root = root
         self._config = config
         self._excluded = frozenset(config.excluded_directories)
-        self._explicit = IgnoreSet.from_lines(config.exclude_patterns)
-        self._include = IgnoreSet.from_lines(config.include_patterns)
+        # Một túi hạn mức duy nhất cho cả lượt quét. Chi phí so khớp là
+        # tokens x độ_dài_đường_dẫn x số_entry, mà chỉ thừa số đầu có trần, nên
+        # trần thật phải đặt ở chỗ cộng dồn được cả ba.
+        self._match_budget = MatchBudget()
+        self._explicit = IgnoreSet.from_lines(
+            config.exclude_patterns, budget=self._match_budget
+        )
+        self._include = IgnoreSet.from_lines(
+            config.include_patterns, budget=self._match_budget
+        )
         self._visited_directories: Set[Tuple[int, int]] = set()
         self._visited_files: Set[Tuple[int, int]] = set()
         self.errors: List[ScanError] = []
@@ -59,6 +67,11 @@ class Discovery:
         # Danh sách loại trừ mặc định là quyết định của công cụ, không phải của
         # repo, nên nó đi vào thống kê chứ không thành CẢNH BÁO.
         self.excluded_directories_hit = 0
+
+    @property
+    def ignore_budget_exhausted(self) -> bool:
+        """Hạn mức so khớp đã cạn nên quy tắc ignore ngừng có hiệu lực."""
+        return self._match_budget.exhausted
 
     def walk(self) -> Iterator[DiscoveredFile]:
         if self._root.is_file():
@@ -102,7 +115,7 @@ class Discovery:
         for name in names:
             candidate = directory / name
             if candidate.is_file() and not safe_paths.is_link_like(candidate):
-                loaded = IgnoreSet.from_file(candidate)
+                loaded = IgnoreSet.from_file(candidate, budget=self._match_budget)
                 if loaded.overflowed:
                     self.errors.append(
                         ScanError(

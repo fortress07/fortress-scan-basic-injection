@@ -970,15 +970,13 @@ _RUST_SOURCES: Dict[str, str] = {
 }
 
 # PowerShell gọi cmdlet không có dấu ngoặc, nên bộ đọc không tách được đối số
-# thật khỏi tên tham số: `Start-Process -FilePath ping -ArgumentList @(...)`
-# đi vào đây thành một khối token trong đó `-FilePath` là một định danh. Vì
-# vậy phép hỏi "giá trị này có phải hằng không" -- thứ sinh ra các rule -002/
-# -003 -- luôn trả lời "không", trên cả những dòng đúng chuẩn nhất. Bỏ hẳn
-# dynamic_rule ở đây: những sink này chỉ báo khi có vết nhiễm THẬT.
+# thật khỏi tên tham số: trong `Start-Process -FilePath ping` thì `-FilePath`
+# cũng là một định danh. Phép hỏi "giá trị này có phải hằng không" vì thế luôn
+# trả lời "không", kể cả trên dòng đúng chuẩn nhất, nên các sink ở đây bỏ hẳn
+# dynamic_rule và chỉ báo khi có vết nhiễm thật.
 #
-# Invoke-Expression là ngoại lệ duy nhất giữ lại: một Invoke-Expression nhận
-# giá trị không phải hằng thì tự nó đã là điều đáng rà, bất kể có dựng được
-# đường đi hay không.
+# Invoke-Expression là ngoại lệ: nhận một giá trị không phải hằng thì tự nó đã
+# đáng rà, bất kể có dựng được đường đi hay không.
 _POWERSHELL_SINKS: Tuple[GenericSink, ...] = (
     GenericSink(
         ("Invoke-Expression", "iex", "IEX"),
