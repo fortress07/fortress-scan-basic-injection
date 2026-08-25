@@ -20,8 +20,39 @@ class RuleSpec:
     references: Tuple[str, ...] = ()
 
 
-_OWASP_INJECTION = ("A03:2021-Injection",)
-_OWASP_INTEGRITY = ("A08:2021-Software and Data Integrity Failures",)
+# OWASP Top 10:2025 là mốc chính, nhãn 2021 đi kèm phía sau.
+#
+# Giữ cả hai vì hai lý do thực tế. Nhiều nơi ( báo cáo tuân thủ, bảng điều
+# khiển code scanning, mẫu phiếu kiểm thử ) vẫn đang tính theo 2021, và mã rule
+# cùng khoá JSON của bản 0.1.0 là giao diện ổn định nên chỉ được THÊM vào chứ
+# không được thay bằng thứ người dùng cũ không tra ra.
+#
+# Bản 2025 gộp lại vài chỗ đáng chú ý với đúng những gì công cụ này quét:
+# SSRF thôi đứng riêng và về chung với Broken Access Control; chuỗi cung ứng
+# tách thành một mục riêng ( A03 ) thay vì nấp trong A08; còn XXE vẫn nằm
+# trong Security Misconfiguration như từ 2021.
+_OWASP_INJECTION = ("A05:2025-Injection", "A03:2021-Injection")
+_OWASP_INTEGRITY = (
+    "A08:2025-Software or Data Integrity Failures",
+    "A08:2021-Software and Data Integrity Failures",
+)
+# Chuỗi cung ứng phần mềm được nâng thành một mục riêng trong bản 2025.
+_OWASP_SUPPLY_CHAIN = (
+    "A03:2025-Software Supply Chain Failures",
+    "A08:2021-Software and Data Integrity Failures",
+)
+# Đi ra ngoài phạm vi tài nguyên được phép: path traversal và open redirect.
+_OWASP_ACCESS = ("A01:2025-Broken Access Control", "A01:2021-Broken Access Control")
+# SSRF không còn là mục riêng của bản 2025; nó về chung với kiểm soát truy cập.
+_OWASP_SSRF = (
+    "A01:2025-Broken Access Control",
+    "A10:2021-Server-Side Request Forgery",
+)
+# XXE nằm trong Security Misconfiguration, giống cách bản 2021 xếp nó.
+_OWASP_MISCONFIGURATION = (
+    "A02:2025-Security Misconfiguration",
+    "A05:2021-Security Misconfiguration",
+)
 
 _RULE_LIST: Tuple[RuleSpec, ...] = (
     RuleSpec(
@@ -316,7 +347,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.CRITICAL,
         confidence=Confidence.HIGH,
         cwe=("CWE-829", "CWE-98"),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_INJECTION,
         description=(
             "Dữ liệu kẻ tấn công điều khiển được chọn module, tệp hay đường dẫn sẽ được nạp và "
             "thực thi. Nạp một module là chạy mã ở mức cao nhất của module đó, nên điều khiển được "
@@ -406,7 +437,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.HIGH,
         confidence=Confidence.MEDIUM,
         cwe=("CWE-611",),
-        owasp=_OWASP_INJECTION,
+        owasp=_OWASP_MISCONFIGURATION,
         description=(
             "Bộ phân tích XML được cấu hình cho phép phân giải thực thể ngoài hoặc nạp DTD. Một "
             "tài liệu được chế tác có thể đọc tệp cục bộ, gọi tới dịch vụ nội bộ trong mạng, hoặc "
@@ -505,7 +536,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.CRITICAL,
         confidence=Confidence.HIGH,
         cwe=("CWE-506", "CWE-829"),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_SUPPLY_CHAIN,
         description=(
             "Một script chạy lúc cài đặt hoặc build tải nội dung về rồi đẩy thẳng vào trình thông "
             "dịch. Ai kiểm soát được endpoint đó, hoặc chặn được kết nối, sẽ chạy mã trên mọi máy "
@@ -523,7 +554,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.LOW,
         confidence=Confidence.LOW,
         cwe=("CWE-829",),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_SUPPLY_CHAIN,
         description=(
             "Một script chạy lúc cài đặt có gọi lệnh shell. Chuyện này phổ biến và thường hợp lệ, "
             "nhưng đây đúng là cơ chế mà các payload dependency confusion lợi dụng, nên câu lệnh "
@@ -541,7 +572,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.HIGH,
         confidence=Confidence.HIGH,
         cwe=("CWE-22", "CWE-73"),
-        owasp=_OWASP_INJECTION,
+        owasp=_OWASP_ACCESS,
         description=(
             "Một đường dẫn có nguồn gốc từ bên ngoài, kẻ tấn công điều khiển được, đi thẳng vào "
             "việc mở hoặc gửi tệp. Ký tự ../ ( hoặc ..\\ trên Windows ) trong giá trị đó đọc được "
@@ -559,7 +590,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.HIGH,
         confidence=Confidence.MEDIUM,
         cwe=("CWE-918",),
-        owasp=_OWASP_INJECTION,
+        owasp=_OWASP_SSRF,
         description=(
             "Một URL hoặc tên máy có nguồn gốc từ bên ngoài quyết định nơi ứng dụng tự gửi "
             "request. Kẻ tấn công dùng điều đó đọc dịch vụ nội bộ ( metadata cloud, admin panel ) "
@@ -577,7 +608,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.MEDIUM,
         confidence=Confidence.HIGH,
         cwe=("CWE-601",),
-        owasp=_OWASP_INJECTION,
+        owasp=_OWASP_ACCESS,
         description=(
             "Một URL chuyển hướng có nguồn gốc từ bên ngoài đi thẳng vào lệnh redirect. Kẻ tấn "
             "công gửi link mang địa chỉ thật của anh em nhưng nhảy sang trang giả mạo, tận dụng "
@@ -659,7 +690,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.HIGH,
         confidence=Confidence.MEDIUM,
         cwe=("CWE-829", "CWE-94"),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_SUPPLY_CHAIN,
         description=(
             "pull_request_target và workflow_run chạy với token ghi được và đọc được secret của "
             "kho, khác hẳn pull_request thường. Checkout đúng mã của pull request trong một "
@@ -682,7 +713,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.MEDIUM,
         confidence=Confidence.HIGH,
         cwe=("CWE-829", "CWE-494"),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_SUPPLY_CHAIN,
         description=(
             "`uses: chu-so-huu/action@v3` bám vào một tag hoặc một nhánh, mà cả hai đều do bên kia "
             "di chuyển được bất cứ lúc nào. Ai chiếm được kho đó -- hoặc chính chủ sở hữu đổi ý -- "
