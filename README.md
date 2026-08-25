@@ -1,23 +1,39 @@
-# Fortress Scan Basic Injection
+<div align="center">
 
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
-[![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](pyproject.toml)
+# 🛡️ Fortress Scan Basic Injection
 
-Công cụ phân tích tĩnh giúp **phát hiện sớm các lỗ hổng injection** trong mã nguồn. Cài về, trỏ địa chỉ vào
-thư mục dự án, chạy và đọc báo cáo. Giao diện và báo cáo hoàn toàn bằng **tiếng Việt** cho anh em nhé.
+**Công cụ phân tích tĩnh phát hiện sớm lỗ hổng injection trong mã nguồn.**
+Giao diện và báo cáo **hoàn toàn bằng tiếng Việt** cho anh em.
+
+[![version](https://img.shields.io/badge/version-0.1.0-2ea44f?style=for-the-badge)](CHANGELOG.md)
+[![license](https://img.shields.io/badge/license-MIT-1f6feb?style=for-the-badge)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.9%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![dependencies](https://img.shields.io/badge/phụ%20thuộc%20ngoài-0-brightgreen?style=for-the-badge)](pyproject.toml)
+
+[![rules](https://img.shields.io/badge/35-rule-e05d44?style=flat-square)](#-35-rule-trên-17-họ-injection)
+[![families](https://img.shields.io/badge/17-họ%20injection-fe7d37?style=flat-square)](#-35-rule-trên-17-họ-injection)
+[![languages](https://img.shields.io/badge/14-ngôn%20ngữ-4c1?style=flat-square)](#-quét-được-những-dự-án-nào-)
+[![tests](https://img.shields.io/badge/1177-kiểm%20tra%20tự%20động-4c1?style=flat-square)](tests/)
+[![owasp](https://img.shields.io/badge/OWASP%20Top%2010-2025-663399?style=flat-square)](#-đối-chiếu-owasp-top-102025)
+[![network](https://img.shields.io/badge/kết%20nối%20mạng-không%20bao%20giờ-critical?style=flat-square)](#-chỉ-đọc-và-in-báo-cáo-không-làm-gì-khác-)
+
+</div>
 
 ---
 
-## Công cụ này làm gì
+## ⚡ Bắt đầu trong 30 giây
 
-Fortress Scan đọc mã nguồn của anh em và tìm những chỗ **dữ liệu từ bên ngoài có thể bị hiểu thành mã,
-câu lệnh hoặc truy vấn**. Nó không dò từ khóa ( kiểu grep hàm ) mà nó truy ngược **đường đi của dữ liệu** 
-từ nơi đi vào đến nơi phát nổ, rồi in ra cả đường đi để anh em tự kiểm chứng.
+```bash
+git clone https://github.com/fortress07/fortress-scan-basic-injection
+cd fortress-scan-basic-injection
+pip install -e .
+
+python -m fortress_scan ./du-an-cua-toi -v
+```
+
+Kết quả trông như thế này:
 
 ```
-$ python -m fortress_scan ./du-an-cua-toi
-
 app/routes.py
    CRIT  42:4   Dữ liệu không tin cậy được nối thẳng vào câu lệnh SQL
         tham số truy vấn HTTP chạy tới cursor.execute() mà chưa được vô hiệu hóa
@@ -29,180 +45,226 @@ app/routes.py
           dòng 42  chạy tới cursor.execute()
 ```
 
-**35 rule, phủ 17 họ injection:** SQL, NoSQL, LDAP, XPath, OS command, code injection
-(`eval`/`exec`), template (SSTI), expression language, XSS, XXE, file inclusion, reflection, và
-injection trong workflow CI. Kèm 3 nhóm liên quan: giải tuần tự không an toàn, Trojan Source /
-ký tự ẩn, và script cài đặt tải mã từ xa về chạy.
-
-**Ngôn ngữ:** Python ( sâu nhất ), JavaScript, TypeScript, PHP, Java/JVM, Ruby, Go, C#, Rust,
-PowerShell, Perl, Lua, shell, `package.json` và workflow GitHub Actions.
-
-Xem đầy đủ: `python -m fortress_scan --list-rules`, và giải thích từng rule:
-`python -m fortress_scan --explain FSB-SQL-001`
-
-### Có gì mới trong 0.1.0 - bản chính thức đầu tiên
-
-Đây là bản **rời khỏi giai đoạn thử nghiệm**: bộ rule, định dạng báo cáo và các cờ dòng lệnh từ
-đây trở đi được coi là giao diện ổn định.
-
-**Phân tích sâu hơn, kêu oan ít hơn.** Toàn bộ nhóm này nhắm vào một chuyện: bớt báo nhầm mà
-không mù thêm chỗ nào. Mỗi mục đều có cặp kiểm tra "phải im lặng / phải bắn" trong `tests/`.
-
-- **Ngữ cảnh tệp**: phát hiện trong `tests/`, `examples/`, mã do máy sinh hay mã đi mượn bị hạ
-  đúng **một nấc** độ tin cậy và được gắn nhãn - không bao giờ bị giấu đi. Tắt bằng
-  `--no-context-demotion`.
-- **`assert x in CHO_PHEP`** giờ được đọc như `if x not in CHO_PHEP: raise`.
-- **Lớp `enum.Enum` do chính dự án khai báo** được coi là một danh sách cho phép:
-  `Lenh(gia_tri)` hoặc khớp một thành viên, hoặc ném `ValueError`.
-- **`bang.get(khoa)`** không còn mang vết nhiễm của *khoá* sang giá trị trả về - tra bảng ánh xạ
-  vốn là cách khử độc mà chính công cụ này khuyên dùng.
-- **Tham số đã được framework ép kiểu** ( `@app.route('/x/<int:so>')`, `def h(so: int)` của
-  FastAPI ) không còn bị coi là chuỗi tự do.
-- **`sqlalchemy.text('... :id')` kèm tham số ràng buộc** không còn bị gọi là "câu lệnh không phải hằng".
-- Ở các ngôn ngữ phân tích theo token, **trường của một giá trị bẩn giờ cũng bẩn**
-  (`const q = req.query; exec(q.host)`) - trước đây chỉ tên đầy đủ mới được tra.
-
-**Bằng chứng đi kèm mọi phát hiện.** Mỗi phát hiện mang theo vài dòng `evidence` nói rõ vì sao
-công cụ tin hoặc bớt tin: nguồn nào, đường đi mấy bước, có qua ranh giới tệp không, ngữ cảnh tệp
-có hạ mức không. Có mặt ở **cả bốn định dạng** - console (`-v`), JSON, SARIF và Markdown.
-
-**Phạm vi quét rộng hơn.**
-
-- **4 ngôn ngữ mới**: Rust, PowerShell, Perl, Lua ( kể cả OpenResty `ngx.*` ).
-- **Workflow CI là mã nguồn**, và có bộ phân tích riêng: 4 rule mới cho injection biểu thức
-  `${{ ... }}` trong `run:` (`FSB-CI-001`) và trong script inline của action (`FSB-CI-002`),
-  "pwn request" (`FSB-CI-003`), và action ghim bằng nhãn di chuyển được (`FSB-CI-004`).
-
-**Hai tính năng cho việc dùng hằng ngày.**
-
-- **`--diff patch`** - chỉ báo phát hiện chạm vào dòng vừa đổi. Đây là thứ khiến một bộ dò tĩnh
-  sống được trong CI: pull request không còn đỏ vì nợ của người khác. Công cụ **không tự chạy
-  `git`** - nó đọc một patch anh em đưa vào, nên vẫn không sinh tiến trình con nào.
-- **`--explain FSB-SQL-001`** - in đầy đủ vì sao rule đó là lỗ hổng và cách sửa đúng.
-- **`--fail-on-confidence`** - chỉ chặn CI theo phát hiện đủ chắc chắn.
-
-**Tự siết lại chính mình.** Bộ đọc patch và bộ đọc workflow đều coi đầu vào là **không tin cậy**:
-có trần kích thước, trần số dòng, trần số biểu thức; đường dẫn trong patch bị chặn không cho thoát
-ra ngoài cây quét; mẫu `${{ ... }}` chỉ chạy trên dòng có chứa nó và bị cắt theo độ dài để không
-tự biến công cụ thành nạn nhân của tệp nó đang đọc; phép tra khoảng dòng dùng `bisect` thay vì
-quét tuyến tính.
-
-### Quét được những lỗ hổng nào ? ( đọc kĩ nhé vì còn một vài vuln chưa được cập nhật )
-
-Mỗi rule dưới đây đều có **mẫu mã nguồn thật làm nó active** và ( với đa số ) **một mẫu an toàn tương ứng
-để chắc nó không kêu bừa**, chạy tự động trong `tests/test_rule_coverage.py`. Có test bắt buộc mọi
-rule đăng ký phải có mẫu kích hoạt, nên bảng này không thể lệch khỏi code.
-
-| Họ lỗ hổng | Rule | Ví dụ bắt được |
-| --- | --- | --- |
-| OS command injection | `FSB-CMD-001` crit · `-002` high · `-003` med · `-004` med | `os.system("ping " + input_ng)`, chương trình do input quyết định, biến shell không đặt nháy |
-| SQL injection | `FSB-SQL-001` crit · `-002` med | `cursor.execute(f"... WHERE n='{ten}'")` |
-| Code injection | `FSB-EXEC-001` crit · `-002` med | `eval(payload)`, `exec(payload)` |
-| Template injection (SSTI) | `FSB-TMPL-001` crit · `-002` med | `jinja_env.from_string(tpl_nguoi_dung)` |
-| Dynamic import / file inclusion | `FSB-IMPORT-001` crit · `-002` low | `importlib.import_module(ten_ng)`, `include($_GET['page'])` |
-| Giải tuần tự không an toàn | `FSB-DESER-001` crit · `-002` med | `pickle.loads(body)`, `yaml.load(...)` không `SafeLoader` |
-| Expression language | `FSB-EL-001` crit | SpEL `parser.parseExpression(q).getValue()` |
-| NoSQL injection | `FSB-NOSQL-001` high | `{"$where": gia_tri_ng}` |
-| LDAP injection | `FSB-LDAP-001` high | `conn.search_s(base, scope, filter_ng)` |
-| XPath injection | `FSB-XPATH-001` high | `tree.xpath("//user[@n='" + ten + "']")` |
-| Reflection | `FSB-REFL-001` high | `getattr(os, ten_ham_tu_input)` |
-| XSS / xuất HTML thô | `FSB-XSS-001` high | `el.innerHTML = req.body.bio` |
-| XXE | `FSB-XML-001` high | `XMLParser(resolve_entities=True)` |
-| Trojan Source / ký tự ẩn | `FSB-UNI-001` high · `-002` med · `-003` low · `-004` med | ký tự đảo chiều bidi, ký tự rộng bằng không, token trộn bảng chữ cái |
-| Supply chain | `FSB-SUP-001` crit · `-002` low | `package.json` có `postinstall` tải script từ xa về chạy |
-| Path traversal | `FSB-PATH-001` high | `open('/data/' + ten_tu_input)`, `res.download(duong_dan_ng)` |
-| SSRF | `FSB-SSRF-001` high | `requests.get(url_tu_input)`, PHP `file_get_contents($url_ng)` |
-| Open redirect | `FSB-REDIR-001` med | `flask.redirect(request.args['next'])`, `res.redirect(req.query.next)` |
-| CRLF / header phản hồi | `FSB-HDR-001` high | `resp.headers['X-Trace'] = gia_tri_ng`, PHP `header($gia_tri_ng)` |
-| Injection trong workflow CI | `FSB-CI-001` crit · `-002` crit · `-003` high · `-004` med | `run: echo "${{ github.event.issue.title }}"`, pwn request, action ghim bằng tag |
-
-### Quét được những dự án nào ?
-
-Python có parser AST + phân tích luồng dữ liệu nên sâu hơn hẳn; các ngôn ngữ còn lại phân tích theo
-token nên chỉ bắt được dạng "nguồn -> biến -> sink" trong cùng một hàm.
-
-| Dự án của anh em viết bằng | Bắt được |
-| --- | --- |
-| **Python** - Flask, Django, FastAPI, CLI, script | 27/35 rule: command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode, path traversal, SSRF, redirect, header |
-| **JavaScript / TypeScript** - Express, Node | command, code (`eval`), SQL, dynamic `require`, XSS, SSRF (`fetch`), redirect, path (`fs.readFile`), header (`setHeader`) |
-| **PHP** - `$_GET`/`$_POST`/`$_COOKIE` | command, code (`eval`), SQL, `include`, `unserialize`, SSRF (`file_get_contents`), path (`fopen`), header (`header()`) |
-| **Ruby** - Rails-style `params` | command, code (`eval`), template (ERB), `Marshal.load` |
-| **Java/JVM** - Servlet `getParameter` | command, SQL, expression language (SpEL) |
-| **Go** - `net/http` + `database/sql` | command, SQL, template |
-| **C#** - ASP.NET `Request.Query` | SQL |
-| **Shell** - bash/sh | `eval`, biến không đặt trong nháy kép |
-| **Rust** - actix/axum + `std::process` | command ( tên chương trình do input quyết định ), SQL, path, SSRF, template, nạp thư viện động |
-| **PowerShell** - script build, script CI | `Invoke-Expression`, tạo tiến trình, SQL, `Import-Module`, path, SSRF |
-| **Perl** - CGI `$q->param` | command, `eval`, `open` hai đối số, SQL (DBI), `Storable::thaw` |
-| **Lua** - OpenResty `ngx.*` | `loadstring`, `os.execute`, `io.popen`, SQL, path, `ngx.say`, `ngx.redirect` |
-| **`package.json`** | script vòng đời tải mã từ xa về chạy |
-| **Workflow GitHub Actions** - `.github/workflows/*.yml` | injection biểu thức trong `run:` và script inline, pwn request, action ghim bằng nhãn di động |
-
-**Nguồn dữ liệu Python được nhận ra** : từng cái dưới đây mình đã chạy thử và đều ra **critical**:
-`flask.request` với `.args` / `.form` / `.cookies` / `.headers` / `.get_json()` / `.get_data()`,
-`request.GET` và `request.POST` của Django, tham số handler của FastAPI, `input()`,
-`sys.stdin.readline()`, phản hồi của `requests` và `urllib.request.urlopen()`.
-
-Biến môi trường (`os.getenv`) và tham số dòng lệnh (`argparse`) **mặc định tắt** vì hay báo nhầm -
-bật bằng `--include-env-sources` thì chúng cũng lên critical.
-
-Đọc từ socket qua biến ( `conn.recv()`, `recvfrom`, `recv_into` ) cũng được nhận ra ở mức medium:
-kết nối nội bộ giữa hai dịch vụ của chính mình không nhất thiết là không tin cậy, nên công cụ không
-dám khẳng định cứng như `flask.request`.
-
-### CHỈ ĐỌC VÀ IN BÁO CÁO, KHÔNG LÀM GÌ KHÁC !
-
-Để đảm bảo tính bí mật về mã nguồn dự án của anh em khi dùng Fortress Scan thì mình đã thiết kế Fortress Scan:
-
-- **Không sửa gì** trong code
-- **Không ghi file nào** trừ khi anh em tự yêu cầu bằng `-o` hoặc `--write-baseline`
-- **Không đọc gì** ngoài thư mục bro chỉ định
-- **Không mở kết nối mạng**, không telemetry, không kiểm tra cập nhật, code không đi đâu hết
-- **Không chạy hay import** mã được quét, chỉ phân tích cú pháp
-- **Không phụ thuộc thư viện ngoài** - các module đều thuộc thư viện chuẩn Python
+> [!NOTE]
+> Fortress Scan **không dò từ khoá** kiểu grep tên hàm. Nó truy ngược **đường đi của dữ liệu**
+> từ nơi đi vào tới nơi phát nổ, rồi in ra cả đường đi để anh em tự kiểm chứng.
 
 ---
 
-## Mục đích
+## 🎯 Công cụ này làm gì
 
-Đây là **dự án cá nhân**, viết ra vì mong muốn anh em dev Việt Nam có một công cụ **tiếng Việt** để
-soi lại code **trước khi đưa lên production**.
+```mermaid
+flowchart LR
+    A["🌐 NGUỒN<br/>request.args<br/>$_GET · req.query"] --> B["🔀 LAN TRUYỀN<br/>gán · nối chuỗi<br/>f-string · gọi hàm"]
+    B --> C{"🧼 Có bị<br/>khử độc<br/>không ?"}
+    C -->|"CÓ<br/>shlex.quote · tham số hoá<br/>danh sách trắng"| D["✅ IM LẶNG<br/>không báo gì"]
+    C -->|"KHÔNG"| E["🔥 SINK<br/>os.system<br/>cursor.execute · eval"]
+    E --> F["🚨 PHÁT HIỆN<br/>kèm đường đi đầy đủ"]
 
-Nó tồn tại như **một lớp tham khảo thêm** bên cạnh việc tự review mà không phải tìm một người khác pentest hoặc thậm chí phải dùng AI agent để scan lại ( làm tốn token quý giá của anh em ), không cần cấu hình,
-chỉ ra chỗ đáng ngờ kèm đường đi của dữ liệu, rồi phần còn lại toàn quyền xử lý của anh em.
-
----
-
-## Cài đặt
-
-Yêu cầu **Python 3.9 trở lên**.
-
-```bash
-git clone https://github.com/fortress07/fortress-scan-basic-injection
-cd fortress-scan-basic-injection
-pip install -e .
-python -m fortress_scan --version
+    style A fill:#1f6feb,color:#ffffff,stroke:#1f6feb,stroke-width:2px
+    style B fill:#8250df,color:#ffffff,stroke:#8250df,stroke-width:2px
+    style C fill:#bf8700,color:#ffffff,stroke:#bf8700,stroke-width:2px
+    style D fill:#1a7f37,color:#ffffff,stroke:#1a7f37,stroke-width:2px
+    style E fill:#cf222e,color:#ffffff,stroke:#cf222e,stroke-width:2px
+    style F fill:#a40e26,color:#ffffff,stroke:#a40e26,stroke-width:3px
 ```
 
-### Cách dùng
+Chỉ khi dữ liệu bẩn **tới được sink mà chưa bị vô hiệu hoá** thì mới thành một phát hiện, và báo
+cáo in ra **cả đường đi** để anh em tự kiểm chứng chứ không bắt phải tin tuyệt đối.
+
+---
+
+## 📊 Bản 0.1.0 bằng những con số
+
+<table>
+<tr>
+<td align="center"><b>35</b><br/><sub>rule</sub></td>
+<td align="center"><b>17</b><br/><sub>họ injection</sub></td>
+<td align="center"><b>14</b><br/><sub>ngôn ngữ &amp; định dạng</sub></td>
+<td align="center"><b>1177</b><br/><sub>kiểm tra tự động</sub></td>
+<td align="center"><b>0</b><br/><sub>phụ thuộc ngoài</sub></td>
+</tr>
+</table>
+
+### Mức độ nghiêm trọng của 35 rule
+
+| Mức | Số rule | Biểu đồ |
+| :--- | ---: | :--- |
+| 🔴 **critical** | **10** | 🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥 |
+| 🟠 **high** | **12** | 🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧 |
+| 🟡 **medium** | **10** | 🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨 |
+| 🔵 **low** | **3** | 🟦🟦🟦 |
+
+### 35 rule chia theo họ lỗ hổng
+
+```mermaid
+pie showData
+    title Số rule trên từng họ
+    "OS command" : 5
+    "Supply chain" : 4
+    "Trojan Source / unicode" : 4
+    "Code execution" : 3
+    "SQL" : 2
+    "Template (SSTI)" : 2
+    "Deserialization" : 2
+    "Dynamic import" : 2
+    "Còn lại (9 họ, mỗi họ 1)" : 9
+```
+
+---
+
+## 🛡️ Đối chiếu OWASP Top 10:2025
+
+Bản 0.1.0 gắn nhãn theo **OWASP Top 10:2025**, và giữ luôn nhãn **2021** đi kèm vì nhiều nơi
+( báo cáo tuân thủ, bảng điều khiển code scanning ) vẫn đang tính theo bản cũ. Cả hai đều có mặt
+trong JSON và SARIF nên anh em lọc theo bản nào cũng được.
+
+```mermaid
+pie showData
+    title 35 rule đối chiếu OWASP Top 10:2025
+    "A05 Injection" : 20
+    "A08 Software or Data Integrity Failures" : 7
+    "A03 Software Supply Chain Failures" : 4
+    "A01 Broken Access Control" : 3
+    "A02 Security Misconfiguration" : 1
+```
+
+| OWASP Top 10:2025 | Rule của Fortress Scan | Nhãn 2021 đi kèm |
+| :--- | :--- | :--- |
+| 🟣 **A01 Broken Access Control** | `FSB-PATH-001` · `FSB-REDIR-001` · `FSB-SSRF-001` | A01:2021, và A10:2021 cho SSRF |
+| 🔵 **A02 Security Misconfiguration** | `FSB-XML-001` ( XXE ) | A05:2021 |
+| 🟢 **A03 Software Supply Chain Failures** | `FSB-SUP-001` · `FSB-SUP-002` · `FSB-CI-003` · `FSB-CI-004` | A08:2021 |
+| 🔴 **A05 Injection** | 20 rule: SQL, OS command, code, template, LDAP, XPath, NoSQL, XSS, EL, reflection, header, file inclusion, CI expression | A03:2021 |
+| 🟠 **A08 Software or Data Integrity Failures** | `FSB-DESER-*` · `FSB-UNI-*` · `FSB-IMPORT-002` | A08:2021 |
+
+> [!IMPORTANT]
+> **Ba chỗ bản 2025 xếp khác hẳn bản 2021**, và đó chính là lý do phải cập nhật:
+> **SSRF** thôi đứng riêng ( A10:2021 ) và về chung với Broken Access Control;
+> **chuỗi cung ứng** tách hẳn thành một mục riêng thay vì nấp trong A08;
+> còn **path traversal** và **open redirect** về đúng nhà A01 thay vì bị gộp chung vào Injection.
+
+---
+
+## 🔍 35 rule trên 17 họ injection
+
+Mỗi rule dưới đây đều có **mẫu mã nguồn thật làm nó bắn**, và với đa số là **một mẫu an toàn
+tương ứng** để chắc nó không kêu bừa. Tất cả chạy tự động trong `tests/test_rule_coverage.py`,
+nên bảng này không thể lệch khỏi code.
+
+| Họ lỗ hổng | Rule | Ví dụ bắt được |
+| :--- | :--- | :--- |
+| **OS command injection** | 🔴 `FSB-CMD-001` · 🟠 `-002` · 🟡 `-003` · 🟡 `-004` | `os.system("ping " + input_ng)` |
+| **SQL injection** | 🔴 `FSB-SQL-001` · 🟡 `-002` | `cursor.execute(f"... WHERE n='{ten}'")` |
+| **Code injection** | 🔴 `FSB-EXEC-001` · 🟡 `-002` | `eval(payload)`, `exec(payload)` |
+| **Template injection ( SSTI )** | 🔴 `FSB-TMPL-001` · 🟡 `-002` | `jinja_env.from_string(tpl_nguoi_dung)` |
+| **Dynamic import / file inclusion** | 🔴 `FSB-IMPORT-001` · 🔵 `-002` | `include($_GET['page'])` |
+| **Giải tuần tự không an toàn** | 🔴 `FSB-DESER-001` · 🟡 `-002` | `pickle.loads(body)` |
+| **Expression language** | 🔴 `FSB-EL-001` | SpEL `parser.parseExpression(q).getValue()` |
+| **NoSQL injection** | 🟠 `FSB-NOSQL-001` | `{"$where": gia_tri_ng}` |
+| **LDAP injection** | 🟠 `FSB-LDAP-001` | `conn.search_s(base, scope, filter_ng)` |
+| **XPath injection** | 🟠 `FSB-XPATH-001` | `tree.xpath("//user[@n='" + ten + "']")` |
+| **Reflection** | 🟠 `FSB-REFL-001` | `getattr(os, ten_ham_tu_input)` |
+| **XSS / xuất HTML thô** | 🟠 `FSB-XSS-001` | `el.innerHTML = req.body.bio` |
+| **XXE** | 🟠 `FSB-XML-001` | `XMLParser(resolve_entities=True)` |
+| **Trojan Source / ký tự ẩn** | 🟠 `FSB-UNI-001` · 🟡 `-002` · 🔵 `-003` · 🟡 `-004` | ký tự đảo chiều bidi, ký tự rộng bằng không |
+| **Supply chain** | 🔴 `FSB-SUP-001` · 🔵 `-002` | `postinstall` tải script từ xa về chạy |
+| **Path traversal** | 🟠 `FSB-PATH-001` | `open('/data/' + ten_tu_input)` |
+| **SSRF** | 🟠 `FSB-SSRF-001` | `requests.get(url_tu_input)` |
+| **Open redirect** | 🟡 `FSB-REDIR-001` | `flask.redirect(request.args['next'])` |
+| **CRLF / header phản hồi** | 🟠 `FSB-HDR-001` | `resp.headers['X-Trace'] = gia_tri_ng` |
+| **Injection trong workflow CI** | 🔴 `FSB-CI-001` · 🔴 `-002` · 🟠 `-003` · 🟡 `-004` | `run: echo "${{ github.event.issue.title }}"` |
+
+<sub>🔴 critical · 🟠 high · 🟡 medium · 🔵 low</sub>
+
+Xem đầy đủ bằng `python -m fortress_scan --list-rules`, và giải thích từng rule bằng
+`python -m fortress_scan --explain FSB-SQL-001`.
+
+---
+
+## 🌐 Quét được những dự án nào ?
+
+Python có parser AST cộng phân tích luồng dữ liệu nên **sâu hơn hẳn**. Các ngôn ngữ còn lại phân
+tích theo token nên chỉ bắt được dạng "nguồn → biến → sink" trong cùng một hàm.
+
+| Ngôn ngữ | Độ phủ | Bắt được |
+| :--- | :--- | :--- |
+| 🐍 **Python** <sub>Flask, Django, FastAPI</sub> | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 **27/35** | command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode, path, SSRF, redirect, header |
+| 🟨 **JavaScript / TypeScript** <sub>Express, Node</sub> | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | command, `eval`, SQL, dynamic `require`, XSS, SSRF, redirect, path, header |
+| 🐘 **PHP** <sub>`$_GET` / `$_POST`</sub> | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | command, `eval`, SQL, `include`, `unserialize`, SSRF, path, `header()` |
+| 🌙 **Lua** <sub>OpenResty `ngx.*`</sub> | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | `loadstring`, `os.execute`, `io.popen`, SQL, path, `ngx.redirect` |
+| 🦀 **Rust** <sub>actix, axum</sub> | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | command, SQL, path, SSRF, template, nạp thư viện động |
+| 💠 **PowerShell** <sub>script build, script CI</sub> | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | `Invoke-Expression`, tạo tiến trình, SQL, `Import-Module`, path, SSRF |
+| 🐫 **Perl** <sub>CGI `$q->param`</sub> | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | command, `eval`, `open` hai đối số, SQL ( DBI ), `Storable::thaw` |
+| 💎 **Ruby** <sub>Rails `params`</sub> | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | command, `eval`, template ( ERB ), `Marshal.load` |
+| ⚙️ **Workflow GitHub Actions** | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | injection biểu thức, pwn request, action ghim bằng nhãn di động |
+| ☕ **Java / JVM** <sub>Servlet</sub> | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | command, SQL, expression language ( SpEL ) |
+| 🐹 **Go** <sub>`net/http`</sub> | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | command, SQL, template |
+| 📦 **`package.json`** | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | script vòng đời tải mã từ xa về chạy |
+| 🐚 **Shell** <sub>bash, sh</sub> | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | `eval`, biến không đặt trong nháy kép |
+| 🟦 **C#** <sub>ASP.NET</sub> | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | SQL |
+
+<details>
+<summary><b>📖 Nguồn dữ liệu Python được nhận ra ( bấm để mở )</b></summary>
+
+<br/>
+
+Từng cái dưới đây mình đã chạy thử và đều ra **critical**:
+
+- `flask.request` với `.args` / `.form` / `.cookies` / `.headers` / `.get_json()` / `.get_data()`
+- `request.GET` và `request.POST` của Django
+- Tham số handler của FastAPI
+- `input()`, `sys.stdin.readline()`
+- Phản hồi của `requests` và `urllib.request.urlopen()`
+
+**Mặc định tắt** vì hay báo nhầm, bật bằng `--include-env-sources`:
+biến môi trường ( `os.getenv` ) và tham số dòng lệnh ( `argparse` ). Bật lên thì chúng cũng
+lên critical.
+
+Đọc từ socket qua biến ( `conn.recv()`, `recvfrom`, `recv_into` ) được nhận ở **mức medium**:
+kết nối nội bộ giữa hai dịch vụ của chính mình không nhất thiết là không tin cậy, nên công cụ
+không dám khẳng định cứng như `flask.request`.
+
+</details>
+
+---
+
+## 🔒 CHỈ ĐỌC VÀ IN BÁO CÁO, KHÔNG LÀM GÌ KHÁC !
+
+Để đảm bảo tính bí mật về mã nguồn dự án của anh em, Fortress Scan được thiết kế:
+
+| | Cam kết |
+| :---: | :--- |
+| 🚫 | **Không sửa gì** trong code của anh em |
+| 🚫 | **Không ghi file nào**, trừ khi anh em tự yêu cầu bằng `-o` hoặc `--write-baseline` |
+| 🚫 | **Không đọc gì** ngoài thư mục anh em chỉ định |
+| 🚫 | **Không mở kết nối mạng**, không telemetry, không kiểm tra cập nhật |
+| 🚫 | **Không chạy hay import** mã được quét, chỉ phân tích cú pháp |
+| ✅ | **Không phụ thuộc thư viện ngoài**, các module đều thuộc thư viện chuẩn Python |
+
+Ngay khi khởi động, công cụ **vá đè** `socket`, `subprocess`, `os.system`, `os.fork` và họ hàng
+của chúng, nên mọi nỗ lực gọi mạng hay tạo tiến trình đều ném lỗi. Đây là lý do anh em trỏ nó vào
+mã lạ mà không cần dựng sandbox riêng.
+
+---
+
+## 🚦 Cách dùng
 
 ```bash
-python -m fortress_scan .                        # quét thư mục hiện tại
-python -m fortress_scan ./src -v                 # kèm đường đi dữ liệu + cách khắc phục
-python -m fortress_scan . --min-severity high    # chỉ xem lỗi nặng
+python -m fortress_scan .                         # quét thư mục hiện tại
+python -m fortress_scan ./src -v                  # kèm đường đi dữ liệu và cách khắc phục
+python -m fortress_scan . --min-severity high     # chỉ xem lỗi nặng
 python -m fortress_scan . -f markdown -o BAO-CAO.md
-python -m fortress_scan . --no-cross-file   # mỗi tệp Python tự quét, từng tệp một
 python -m fortress_scan --explain FSB-SQL-001     # vì sao rule này là lỗ hổng, và sửa thế nào
 
-# Chỉ soi phần vừa đổi - dùng cho cổng CI trên pull request
+# Chỉ soi phần vừa đổi, dùng cho cổng CI trên pull request
 git diff --unified=0 origin/main... > changes.patch
 python -m fortress_scan . --diff changes.patch --fail-on-confidence high
 ```
 
-Sau khi cài còn có hai lệnh ngắn `fortress-scan` và `fscan`. Nếu shell báo không tìm thấy lệnh
-(thư mục `Scripts` của Python chưa có trong PATH), cứ dùng `python -m fortress_scan`.
+Sau khi cài còn có hai lệnh gõ tắt là `fortress-scan` và `fscan`. Nếu shell báo không tìm thấy
+lệnh ( thư mục `Scripts` của Python chưa có trong PATH ), cứ dùng `python -m fortress_scan`.
 
-Thử với bộ mẫu có sẵn:
+**Thử với bộ mẫu có sẵn:**
 
 ```bash
 python -m fortress_scan tests/samples/vulnerable --no-config -v   # phải ra 48 phát hiện, 26 critical
@@ -211,180 +273,167 @@ python -m fortress_scan tests/samples/safe --no-config            # phải im l�
 
 Hai thư mục trên có **cùng chức năng**, chỉ khác ở chỗ một bên viết an toàn.
 
-**Mã thoát cho CI:** `0` sạch · `1` có phát hiện · `2` sai cách dùng · `3` lỗi nội bộ.
+**Mã thoát cho CI:**
+
+| Mã | Nghĩa |
+| :---: | :--- |
+| `0` | sạch |
+| `1` | có phát hiện |
+| `2` | sai cách dùng |
+| `3` | lỗi nội bộ |
 
 ---
 
-## Cách hoạt động
+## 🧠 Cách hoạt động
 
-### Khi anh em cài thì máy nhận được gì
+Khi gõ lệnh quét thì có sáu bước xảy ra:
 
-`pip install -e .` chỉ đăng ký gói Python này vào môi trường và tạo hai lệnh gõ tắt
-(`fortress-scan`, `fscan`). Không có script cài đặt nào của riêng công cụ chạy kèm, **không tải gì
-từ mạng**, và **không có phụ thuộc ngoài** - các module đều nằm trong thư viện chuẩn Python.
-Gỡ ra bằng `pip uninstall` là clean ngay.
+```mermaid
+flowchart TD
+    S(["📂 Mã nguồn của anh em"]) --> S1
+    S1["<b>1. Khoá tiến trình</b><br/>vá socket, subprocess, os.system<br/><i>dù có lỗi cũng không chạy được mã, không gọi mạng</i>"] --> S2
+    S2["<b>2. Tìm tệp</b><br/>bỏ thư mục loại trừ, tệp nhị phân, tệp quá lớn<br/><i>không đi theo liên kết trỏ ra ngoài</i>"] --> S3
+    S3["<b>3. Đọc và giải mã</b><br/>Python giải mã đúng theo khai báo <code>coding:</code><br/><i>để thấy đúng thứ CPython sẽ chạy</i>"] --> S4
+    S4["<b>4. Phân tích</b><br/>truy vết đường đi của dữ liệu"] --> S5
+    S5["<b>5. Lọc</b><br/>chú thích tắt cảnh báo → ngưỡng → rule bị tắt → baseline"] --> S6
+    S6["<b>6. Báo cáo</b><br/>console · JSON · SARIF · Markdown + mã thoát"]
 
-### Khi gõ lệnh quét thì có sáu bước xảy ra
-
-```
-mã nguồn của anh em
-      │
-  ┌───▼───────────────┐
-  │ 1. khoá tiến trình│  vá socket, subprocess, os.system... -> dù có lỗi
-  └───┬───────────────┘     cũng không chạy được mã bro quét, không gọi mạng
-  ┌───▼───────────────┐
-  │ 2. tìm tệp        │  bỏ thư mục loại trừ, tệp nhị phân, tệp quá lớn;
-  └───┬───────────────┘     không đi theo liên kết trỏ ra ngoài thư mục đích
-  ┌───▼───────────────┐
-  │ 3. đọc & giải mã  │  Python giải mã đúng theo khai báo `# coding:` (PEP 263)
-  └───┬───────────────┘     để thấy đúng thứ CPython sẽ chạy
-  ┌───▼───────────────┐
-  │ 4. phân tích      │  truy vết đường đi của dữ liệu (xem phần dưới)
-  └───┬───────────────┘
-  ┌───▼───────────────┐
-  │ 5. lọc            │  chú thích tắt cảnh báo -> ngưỡng mức độ/độ tin cậy ->
-  └───┬───────────────┘     rule bị tắt -> sắp xếp -> baseline
-  ┌───▼───────────────┐
-  │ 6. báo cáo        │  console / JSON / SARIF / Markdown + mã thoát
-  └───────────────────┘
+    style S fill:#57606a,color:#ffffff,stroke:#57606a
+    style S1 fill:#cf222e,color:#ffffff,stroke:#cf222e
+    style S2 fill:#bc4c00,color:#ffffff,stroke:#bc4c00
+    style S3 fill:#bf8700,color:#ffffff,stroke:#bf8700
+    style S4 fill:#1a7f37,color:#ffffff,stroke:#1a7f37
+    style S5 fill:#1f6feb,color:#ffffff,stroke:#1f6feb
+    style S6 fill:#8250df,color:#ffffff,stroke:#8250df
 ```
 
-Ở bước 1: công cụ **vá đè** `socket`, `subprocess`, `os.system`, `os.fork`…
-ngay khi khởi động, nên mọi nỗ lực gọi mạng hay tạo tiến trình đều ném lỗi. Đây là lý do anh em có thể
-trỏ nó vào mã lạ mà không cần sandbox riêng.
+### Hai bộ phân tích
 
-Ở bước 2, khi gặp liên kết ( symlink / junction )
+| | 🐍 Python | 🌍 Các ngôn ngữ còn lại |
+| :--- | :--- | :--- |
+| **Cách đọc mã** | dựng cây cú pháp đầy đủ ( AST ) | tách token bằng lexer riêng từng ngôn ngữ |
+| **Theo dữ liệu** | qua `if`, vòng lặp, `try`, và qua hàm khác cùng tệp | trong phạm vi một hàm |
+| **Kết quả** | sâu nhất, đủ 27/35 rule, **theo được taint xuyên file** | bắt dạng "nguồn → biến → sink" cùng hàm |
 
-Mặc định công cụ **không đi theo liên kết** - gặp cái nào bỏ cái đó. Bật `--follow-symlinks` thì nó đi
-theo, nhưng **chỉ những liên kết có đích nằm trong thư mục đang quét**; đích trỏ ra ngoài bị chặn và
-ghi vào báo cáo dưới mã `link-escapes-root`. Liên kết vòng ( a trỏ b, b trỏ a ) cũng bị chặn ở đây chứ
-không làm treo lượt quét.
+Rẽ nhánh thì hai nhánh được **gộp lại** ( nhiễm ở một nhánh là đủ để cảnh báo ), vòng lặp chỉ chạy
+vài vòng rồi dừng, và mỗi tệp có **ngân sách** số node/token nên một tệp dựng riêng để làm treo
+công cụ sẽ bị cắt chứ không kéo cả lần quét đi theo.
+
+<details>
+<summary><b>📖 Khi gặp liên kết ( symlink / junction ) thì sao ? ( bấm để mở )</b></summary>
+
+<br/>
+
+Mặc định công cụ **không đi theo liên kết**, gặp cái nào bỏ cái đó. Bật `--follow-symlinks` thì nó
+đi theo, nhưng **chỉ những liên kết có đích nằm trong thư mục đang quét**. Đích trỏ ra ngoài bị
+chặn và ghi vào báo cáo dưới mã `link-escapes-root`. Liên kết vòng ( a trỏ b, b trỏ a ) cũng bị
+chặn ở đây chứ không làm treo lượt quét.
 
 Ba điều anh em nên biết khi bật cờ này:
 
-- Cùng một tệp tới được qua nhiều tên ( qua liên kết và qua tên thật ) chỉ được **quét một lần**, nên
-  workspace kiểu pnpm - vốn là cả một rừng symlink - không làm phát hiện bị nhân bản.
-- Phát hiện nằm dưới một thư mục được liên kết sẽ báo theo **đường dẫn thật**, không phải đường dẫn
-  liên kết, vì đó mới là chỗ tệp thực sự nằm.
-- Liên kết trỏ vào thư mục vốn bị loại trừ ( `vendor`, `node_modules`, `dist`… ) thì **vẫn được quét**.
-  Đi theo liên kết là quyết định của anh em, nên ở đây công cụ chọn quét sót ít hơn là im lặng bỏ qua.
+- Cùng một tệp tới được qua nhiều tên chỉ được **quét một lần**, nên workspace kiểu pnpm ( vốn là
+  cả một rừng symlink ) không làm phát hiện bị nhân bản.
+- Phát hiện nằm dưới một thư mục được liên kết sẽ báo theo **đường dẫn thật**, vì đó mới là chỗ
+  tệp thực sự nằm.
+- Liên kết trỏ vào thư mục vốn bị loại trừ ( `vendor`, `node_modules`, `dist` ) thì **vẫn được
+  quét**. Đi theo liên kết là quyết định của anh em, nên ở đây công cụ chọn quét sót ít hơn là
+  im lặng bỏ qua.
 
-Những tệp công cụ tự đi tìm trong cây được quét - `.fortress-scan.json`, `.fortress-scanignore`,
-`.gitignore` - thì **không bao giờ được đọc xuyên qua một liên kết**, kể cả khi `--follow-symlinks`
-đang bật. Chúng do người viết repo đặt, mà một liên kết ở đúng chỗ đó thì trỏ ra ngoài thư mục anh
-em chỉ định được. Gặp liên kết là bỏ, và nói ra là đã bỏ. Tệp cấu hình anh em tự trỏ tới bằng
-`--config` thì không dính luật này - đó là lựa chọn của anh em.
+Những tệp công cụ tự đi tìm trong cây được quét ( `.fortress-scan.json`, `.fortress-scanignore`,
+`.gitignore` ) thì **không bao giờ được đọc xuyên qua một liên kết**, kể cả khi `--follow-symlinks`
+đang bật. Tệp cấu hình anh em tự trỏ tới bằng `--config` thì không dính luật này, vì đó là lựa
+chọn của anh em.
 
 Ngoài ra, giữa lúc liệt kê cây và lúc mở tệp ra đọc luôn có một khoảng trống. Ai ghi được vào cây
-đang bị quét có thể tráo tệp ngay trong khoảng đó để đẩy nội dung khác vào phần phân tích. Công cụ
-đối chiếu lại **trên chính handle đã mở** ( chứ không kiểm lại đường dẫn ), tệp nào bị tráo thì bỏ
-và ghi vào báo cáo dưới mã `file-changed-during-scan`.
+đang bị quét có thể tráo tệp ngay trong khoảng đó. Công cụ đối chiếu lại **trên chính handle đã
+mở** ( chứ không kiểm lại đường dẫn ), tệp nào bị tráo thì bỏ và ghi vào báo cáo dưới mã
+`file-changed-during-scan`.
 
-### Nó "hiểu" mã như thế nào - truy vết đường đi của dữ liệu
-
-Công cụ **không dò từ khoá**. Nó dựng lại đường đi của dữ liệu từ nơi vào đến nơi phát nổ:
-
-- **Nguồn** : chỗ dữ liệu người ngoài đi vào: `request.args.get()`, `$_GET`, `req.query`, `input()`…
-- **Lan truyền** : dữ liệu bẩn chảy qua phép gán, nối chuỗi, f-string, phần tử trong list/dict, và
-  qua **lời gọi hàm khác trong cùng tệp** (công cụ tự tóm tắt hàm bạn viết rồi dùng lại).
-- **Vô hiệu hoá** : nếu trên đường đi có hàm khử (`shlex.quote`, `html.escape`, tham số hoá truy vấn)
-  hoặc một phép kiểm tra danh sách trắng (`if x in ALLOWED`, `==` hằng, `isinstance`, `re.fullmatch`),
-  dấu vết bẩn được xoá đúng theo loại lỗ hổng mà hàm đó khử được.
-- **Sink** : API nguy hiểm: `os.system`, `cursor.execute`, `eval`, `from_string`…
-
-Chỉ khi dữ liệu bẩn **tới được sink mà chưa bị vô hiệu hoá** thì mới thành một phát hiện và báo cáo
-in ra **cả đường đi** để tự anh em kiểm chứng, chứ không bắt buộc phải tin tuyệt đối.
-
-Có hai bộ phân tích:
-
-| | Python | Các ngôn ngữ còn lại |
-| --- | --- | --- |
-| Cách đọc mã | dựng cây cú pháp đầy đủ (AST) | tách token bằng lexer riêng cho từng ngôn ngữ |
-| Theo dữ liệu | qua nhánh `if`, vòng lặp, `try`, và qua hàm khác cùng tệp | trong phạm vi một hàm |
-| Kết quả | sâu nhất, đủ 27/35 rule, **theo được taint xuyên file** | bắt được dạng "nguồn -> biến -> sink" trong cùng một hàm |
-
-Rẽ nhánh thì hai nhánh được **gộp lại** ( nhiễm ở một nhánh là đủ để cảnh báo ), vòng lặp chỉ chạy vài
-vòng rồi dừng, và mỗi tệp có **ngân sách** số node/token nên một tệp dựng riêng để làm treo công cụ
-sẽ bị cắt chứ không kéo cả lần quét đi theo.
-
-Bước dò chú thích `fortress-scan: ignore` cũng có ngân sách riêng của nó. Cạn ngân sách thì **toàn bộ
-chú thích trong tệp đó bị bỏ** và báo cáo ghi mã `suppression-scan-too-complex` - tức là ngả về phía
-không giấu gì cả, y như khi một tệp ignore vượt hạn mức.
+</details>
 
 ---
 
-## ⚠️ GIỚI HẠN - xin đọc kỹ trước khi tin kết quả
+## ⚠️ GIỚI HẠN, xin đọc kỹ trước khi tin kết quả
 
-### Công cụ đưa ra **GỢI Ý**, không phải tin tuyệt đối
-### Công cụ đưa ra **GỢI Ý**, không phải tin tuyệt đối
-### Công cụ đưa ra **GỢI Ý**, không phải tin tuyệt đối
-Cái nào quan trọng nhắc lại 3 lần !
-
-**Mọi kết quả cần được bro tự xem xét và quyết định hướng xử lý.**
-
-Công cụ **KHÔNG cam đoan** rằng sửa theo gợi ý là đã vá xong lỗ hổng.
-Công cụ **KHÔNG cam đoan** đã tìm ra hết mọi lỗ hổng trong mã của bạn.
+> [!WARNING]
+> ### Công cụ đưa ra **GỢI Ý**, không phải tin tuyệt đối
+> ### Công cụ đưa ra **GỢI Ý**, không phải tin tuyệt đối
+> ### Công cụ đưa ra **GỢI Ý**, không phải tin tuyệt đối
+>
+> Cái nào quan trọng nhắc lại 3 lần !
+>
+> **Mọi kết quả cần được anh em tự xem xét và quyết định hướng xử lý.**
+>
+> Công cụ **KHÔNG cam đoan** rằng sửa theo gợi ý là đã vá xong lỗ hổng.
+> Công cụ **KHÔNG cam đoan** đã tìm ra hết mọi lỗ hổng trong mã của anh em.
 
 Một báo cáo sạch là *bằng chứng tốt*, **không phải chứng minh là an toàn**. Hãy coi nó như một
-người rà soát thêm, không phải một chứng nhận bảo mật ( nói chung là để tham khảo xem có tồn tại thật không chứ đừng tin tưởng tuyệt đối ).
+người rà soát thêm, không phải một chứng nhận bảo mật.
 
 ### Phạm vi hoạt động
 
-Công cụ neo vào **tên API của thư viện** (`os.system`, `$_GET`, `cursor.execute`) - những cái tên cố
-định. Vì vậy:
+Công cụ neo vào **tên API của thư viện** ( `os.system`, `$_GET`, `cursor.execute` ), những cái tên
+cố định. Vì vậy:
 
-| Tình huống trong code của ae | Kết quả |
-| --- | --- |
+| Tình huống trong code của anh em | Kết quả |
+| :--- | :--- |
 | Đặt tên biến/hàm bằng tiếng Việt, Trung, Nhật ( kể cả có dấu ) | ✅ Không ảnh hưởng gì |
-| Đổi tên thư viện - `import os as he_dieu_hanh` | ✅ Vẫn bắt được |
-| Gán sink vào biến rồi gọi - `chay = os.system; chay(cmd)` | ✅ Vẫn bắt được |
-| Sink nằm trong bảng điều phối / danh sách - `handlers["run"](cmd)` | ✅ Vẫn bắt được |
-| Gọi qua `getattr` với tên hằng - `getattr(os, "system")(cmd)` | ✅ Vẫn bắt được |
+| Đổi tên thư viện, ví dụ `import os as he_dieu_hanh` | ✅ Vẫn bắt được |
+| Gán sink vào biến rồi gọi, ví dụ `chay = os.system; chay(cmd)` | ✅ Vẫn bắt được |
+| Sink nằm trong bảng điều phối, ví dụ `handlers["run"](cmd)` | ✅ Vẫn bắt được |
+| Gọi qua `getattr` với tên hằng, ví dụ `getattr(os, "system")(cmd)` | ✅ Vẫn bắt được |
 | Hàm bọc / tầng CSDL tự viết, **cùng tệp** | ✅ Tự học được, mức critical |
-| Hàm bọc / tầng CSDL tự viết, **khác tệp trong dự án** ( Python ) | ✅ Tự học được qua chỉ mục dự án, mức critical, báo tại chỗ gọi kèm đường đi xuyên file |
+| Hàm bọc / tầng CSDL tự viết, **khác tệp trong dự án** ( Python ) | ✅ Tự học được qua chỉ mục dự án, kèm đường đi xuyên file |
 | Framework hoặc helper lấy input tự viết mà công cụ chưa biết | ⚠️ Chỉ còn mức medium |
-| Wrapper nằm trong **thư viện ngoài** (cài qua pip) | ❌ Bỏ sót |
+| Wrapper nằm trong **thư viện ngoài** ( cài qua pip ) | ❌ Bỏ sót |
 
-**Ngôn ngữ anh em dùng để đặt tên không quan trọng. Cái quyết định là wrapper của bro nằm ở đâu.**
+> **Ngôn ngữ anh em dùng để đặt tên không quan trọng. Cái quyết định là wrapper của anh em nằm ở đâu.**
 
-### Các giới hạn khác
+<details>
+<summary><b>📖 Các giới hạn khác, nói thẳng ( bấm để mở )</b></summary>
 
-- **Python theo được taint xuyên file**: nguồn ở `a.py` chạy qua helper ở `b.py` rồi nổ
-  ở `c.py` vẫn được nối, với chặn trên 2000 tệp / 20000 hàm mỗi lượt quét ( vượt thì báo rõ và hạ
-  về từng tệp ). **Các ngôn ngữ quét theo token thì vẫn dừng ở ranh giới tệp.**
+<br/>
+
+- **Python theo được taint xuyên file**: nguồn ở `a.py` chạy qua helper ở `b.py` rồi nổ ở `c.py`
+  vẫn được nối, với chặn trên 2000 tệp / 20000 hàm mỗi lượt quét. **Các ngôn ngữ quét theo token
+  thì vẫn dừng ở ranh giới tệp.**
 - **Bộ quét theo token không nhìn xuyên qua thân `match` / `switch`.** Nó cắt câu lệnh ở dấu `{`,
-  nên `let dich = match ten { "a" => HANG_A, _ => HANG_B };` bị hiểu là "giá trị lấy từ `ten`" và
-  có thể ra một báo nhầm mức medium, dù mọi nhánh đều trả về hằng. Đây là lựa chọn CÓ CHỦ Ý theo
-  hướng an toàn: đoán ngược lại thì `_ => ten` -- một lỗ hổng thật -- sẽ biến mất trong im lặng.
-- **Ngoài Python là phân tích theo token**, không phải parser đầy đủ - độ bao phủ thấp hơn, và giá
+  nên `let dich = match ten { "a" => HANG_A, _ => HANG_B };` có thể ra một báo nhầm mức medium.
+  Đây là lựa chọn CÓ CHỦ Ý theo hướng an toàn: đoán ngược lại thì `_ => ten`, một lỗ hổng thật,
+  sẽ biến mất trong im lặng.
+- **Ngoài Python là phân tích theo token**, không phải parser đầy đủ. Độ bao phủ thấp hơn, và giá
   trị "độ tin cậy" trong báo cáo phản ánh đúng điều đó.
-- **Không theo được dữ liệu lưu vào thuộc tính đối tượng**, và không phát hiện **injection bậc hai**
-  (dữ liệu bẩn ghi vào CSDL rồi đọc ra dùng lại).
+- **Không theo được dữ liệu lưu vào thuộc tính đối tượng**, và không phát hiện **injection bậc
+  hai** ( dữ liệu bẩn ghi vào CSDL rồi đọc ra dùng lại ).
 - **Workflow CI đọc bằng bộ quét theo dòng, không phải bộ phân tích YAML đầy đủ**: neo và alias
-  (`*ref`), luồng kiểu JSON (`run: {a: b}`) và biểu thức đi xuyên qua ranh giới của một action tự
-  viết đều nằm ngoài tầm nhìn. Đây là đánh đổi để giữ đúng lời hứa "không phụ thuộc thư viện ngoài"
-  mà không tự viết thêm một mặt tấn công ( alias bung vô hạn ) vào chính công cụ.
-- **Kiểu viết trên nhiều dòng hoặc có `;` bên trong kiểu dữ liệu thì chưa tách câu lệnh đúng** -
+  ( `*ref` ), luồng kiểu JSON ( `run: {a: b}` ) và biểu thức đi xuyên qua ranh giới của một action
+  tự viết đều nằm ngoài tầm nhìn. Đây là đánh đổi để giữ đúng lời hứa "không phụ thuộc thư viện
+  ngoài" mà không tự viết thêm một mặt tấn công ( alias bung vô hạn ) vào chính công cụ.
+- **Kiểu viết trên nhiều dòng hoặc có `;` bên trong kiểu dữ liệu thì chưa tách câu lệnh đúng**,
   ví dụ TypeScript `const o: {a: string; b: number} = nguon_ng` bị cắt câu ngay dấu `;`, nên chỉ
   còn cảnh báo mức medium.
-- **Chưa hỗ trợ:** log injection, prototype pollution, ReDoS, lỗi logic nghiệp vụ. PHP
-  `header()` được xếp vào họ CRLF/header; vị trí `response['X-Header'] = v` của Django ( không có
-  chữ `headers` ) chưa bắt được.
-- Sẽ có **báo nhầm** và **bỏ sót** - phân tích tĩnh vốn không đầy
-  đủ. Công cụ **bổ sung** cho code review, quét phụ thuộc và kiểm thử động, **không thay thế** cái
-  nào hết.
+- **Chưa hỗ trợ**: log injection, prototype pollution, ReDoS, lỗi logic nghiệp vụ. Vị trí
+  `response['X-Header'] = v` của Django ( không có chữ `headers` ) chưa bắt được.
+- Sẽ có **báo nhầm** và **bỏ sót**, phân tích tĩnh vốn không đầy đủ. Công cụ **bổ sung** cho code
+  review, quét phụ thuộc và kiểm thử động, **không thay thế** cái nào hết.
+
+</details>
 
 ### 🖥️ Nền tảng
 
-**Phát triển và kiểm thử trên Windows 11**
+| Nền tảng | Trạng thái |
+| :--- | :--- |
+| 🪟 **Windows 11** | ✅ Phát triển và kiểm thử đầy đủ |
+| 🐧 **Linux** | ⚠️ Chưa chạy thử thực tế, xin coi là bản thử nghiệm |
+| 🍎 **macOS** | ⚠️ Chưa chạy thử thực tế, xin coi là bản thử nghiệm |
 
-**Trên Linux và macOS: tác giả chưa chạy thử thực tế.** Mã nguồn viết theo hướng đa nền tảng và 
-nhiều khả năng chạy bình thường, nhưng **chưa có bằng chứng thực nghiệm** - nếu anh em nào có dùng
-Linux/macOS xin coi đây là phiên bản thử nghiệm 
-( sắp tới mình sẽ qua research bên Linux để kiểm tra kĩ hơn - thú thật với mọi người là phần này 
-mình có thiết kế cho AI viết để đảm bảo tránh xung đột hệ điều hành ).
+Mã nguồn viết theo hướng đa nền tảng và nhiều khả năng chạy bình thường, nhưng **chưa có bằng
+chứng thực nghiệm**. Sắp tới mình sẽ qua research bên Linux để kiểm tra kĩ hơn. Thú thật với mọi
+người là phần này mình có thiết kế cho AI viết để đảm bảo tránh xung đột hệ điều hành.
 
-### Khi quét mã không đáng tin
+---
+
+## 🕵️ Khi quét mã không đáng tin
 
 Chú thích `fortress-scan: ignore`, tệp `.fortress-scan.json`, `.fortress-scanignore` và `.gitignore`
 đều nằm **trong chính mã được quét**, nên người viết mã có thể dùng chúng để giấu phát hiện. Khi
@@ -399,43 +448,40 @@ python -m fortress_scan <duong-dan> \
 ```
 
 | Cờ | Vô hiệu hoá |
-| --- | --- |
+| :--- | :--- |
 | `--no-inline-suppressions` | mọi chú thích `fortress-scan: ignore*` trong mã |
 | `--no-config` | tệp `.fortress-scan.json` |
 | `--no-ignore-files` | tệp `.fortress-scanignore` |
 | `--no-vcs-ignore` | tệp `.gitignore` |
 
-Có **ba** phạm vi chú thích, không chỉ một - `ignore-file` giấu được **cả tệp** nên đáng chú ý nhất
+Có **ba** phạm vi chú thích, không chỉ một. `ignore-file` giấu được **cả tệp** nên đáng chú ý nhất
 khi đọc mã lạ:
 
 | Chú thích | Che |
-| --- | --- |
+| :--- | :--- |
 | `# fortress-scan: ignore` | đúng dòng đang viết |
 | `# fortress-scan: ignore-next-line` | dòng ngay bên dưới |
 | `# fortress-scan: ignore-file` | **toàn bộ tệp** |
 
-Giới hạn theo rule bằng `# fortress-scan: ignore [FSB-CMD-001]`. Chỉ thị **nằm trong chuỗi không
-được tính** - `HELP = "# fortress-scan: ignore-file"` chỉ là dữ liệu, không tắt gì hết.
+Giới hạn theo rule bằng `# fortress-scan: ignore [FSB-CMD-001]`.
 
-Viết chỉ thị bằng `#`, `//`, `/* */` hay `<!-- -->` đều được, như trước.
+> [!TIP]
+> **Chỉ thị nằm trong chuỗi không được tính.** `HELP = "# fortress-scan: ignore-file"` chỉ là dữ
+> liệu, không tắt gì hết. Đây là họ lỗ hổng dai dẳng nhất của cả dự án: bản 0.1.0 phải quay lại
+> bịt nó nhiều đợt, trên gần như mọi ngôn ngữ được hỗ trợ.
 
-Điều đổi là **cách công cụ nhận ra đâu là chú thích thật** khi đi xoá nội dung chuỗi: nó tra theo
-đúng ngôn ngữ của tệp thay vì dùng chung một danh sách cho tất cả.
+<details>
+<summary><b>📖 Vì sao chuyện "chỉ thị trong chuỗi" lại khó đến thế ( bấm để mở )</b></summary>
 
-| Ngôn ngữ | Được coi là mở chú thích |
-| --- | --- |
-| Python | `#` |
-| Shell | `#`, và phải đứng đầu một từ |
-| JavaScript, TypeScript, Java/JVM, C#, Go | `//`, `/* */` |
-| PHP | `//`, `#`, `/* */` |
-| Ruby | `#` |
+<br/>
 
-Dùng chung một danh sách là một đường lách thật, vì mỗi dấu trong đó lại là **toán tử hợp lệ** ở ngôn
-ngữ khác: `//` là phép chia nguyên của Python, `--` là toán tử giảm của JS/Java/C#/PHP, `#` là trường
-riêng tư của JavaScript, còn `a <!--b` là `a < !(--b)` ở cả bốn ngôn ngữ họ C. Gặp một trong số đó,
-bộ mặt nạ kết luận "chú thích bắt đầu từ đây" rồi để nguyên phần đuôi dòng - kể cả hằng chuỗi nằm
-sau nó. Thế là những dòng dưới đây, **không dòng nào có lấy một chú thích**, từng tắt sạch phát hiện
-của cả tệp:
+**Nửa thứ nhất: đâu là chú thích thật.** Dùng chung một danh sách dấu mở chú thích cho mọi ngôn
+ngữ là một đường lách thật, vì mỗi dấu trong đó lại là **toán tử hợp lệ** ở ngôn ngữ khác: `//` là
+phép chia nguyên của Python, `--` là toán tử giảm của JS/Java/C#/PHP, `#` là trường riêng tư của
+JavaScript, còn `a <!--b` là `a < !(--b)` ở cả bốn ngôn ngữ họ C.
+
+Thế là những dòng dưới đây, **không dòng nào có lấy một chú thích**, từng tắt sạch phát hiện của
+cả tệp:
 
 ```python
 mid = (lo + hi) // 2 ; NOTE = "# fortress-scan: ignore-file"      # Python
@@ -447,13 +493,17 @@ let i = 5; i--; const NOTE = "// fortress-scan: ignore-file";     // JavaScript
 curl http://example.com/#frag; MSG="# fortress-scan: ignore-file" # Shell
 ```
 
-Chú thích khối giờ **đóng lại đúng chỗ** thay vì nuốt trọn phần đuôi dòng, nên `/* ghi chú */ NOTE =
-"..."` cũng không còn lách được.
+| Ngôn ngữ | Được coi là mở chú thích |
+| :--- | :--- |
+| Python, Ruby | `#` |
+| Shell | `#`, và phải đứng đầu một từ |
+| JavaScript, TypeScript, Java/JVM, C#, Go | `//`, `/* */` |
+| PHP | `//`, `#`, `/* */` |
+| Lua | `--` |
 
-Cùng một câu hỏi còn có nửa thứ hai: **chuỗi kết thúc ở đâu**. Bộ mặt nạ đóng chuỗi sớm hơn ngôn ngữ
-thật một dòng thôi là đủ - phần thân còn lại vẫn là nội dung chuỗi với trình thông dịch, nhưng với
-công cụ thì đã thành mã, và một dấu `#` trong đó mở ra một "chú thích" mang theo `ignore-file`. Ba
-đoạn dưới đây **không đoạn nào có lấy một chú thích**, mà cả ba từng tắt sạch phát hiện của cả tệp:
+**Nửa thứ hai: chuỗi kết thúc ở đâu.** Bộ mặt nạ đóng chuỗi sớm hơn ngôn ngữ thật một dòng thôi là
+đủ: phần thân còn lại vẫn là nội dung chuỗi với trình thông dịch, nhưng với công cụ thì đã thành
+mã, và một dấu `#` trong đó mở ra một "chú thích" mang theo `ignore-file`.
 
 ```python
 """tài liệu
@@ -461,101 +511,102 @@ ví dụ \""" ở đây
 # fortress-scan: ignore-file
 """
 ```
-```php
-$note = <<<EOT
-# fortress-scan: ignore-file
-EOT;
-```
 ```ruby
-note = "tài liệu
-# fortress-scan: ignore-file"
+n = %q{# fortress-scan: ignore-file}
 ```
-
-Nên chỗ chuỗi đóng cũng tra theo từng ngôn ngữ, y như chỗ chú thích mở:
+```perl
+my $n = <<eot;
+# fortress-scan: ignore-file
+eot
+```
 
 | Dạng chuỗi | Ngôn ngữ | Kết thúc ở |
-| --- | --- | --- |
-| `"..."` `'...'` | Python, JS/TS, Java, C#, Go | cuối dòng, trừ khi có `\` nối dòng ( Python, JS/TS, shell ) |
+| :--- | :--- | :--- |
+| `"..."` `'...'` | Python, JS/TS, Java, C#, Go | cuối dòng, trừ khi có `\` nối dòng |
 | `"..."` `'...'` | PHP, Ruby, shell | dấu nháy đóng, **bắc qua bao nhiêu dòng cũng được** |
 | `` `...` `` | JS/TS, Go | dấu backtick đóng, bắc qua dòng |
 | `@"..."` | C# | dấu nháy đóng, bắc qua dòng |
 | `"""..."""` `'''...'''` | Python, Java text block, C# raw string | dấu ba nháy đóng **chưa bị `\` thoát** |
-| `<<<EOT` `<<~EOT` `<<EOF` | PHP, Ruby, shell | dòng chỉ có đúng nhãn kết thúc |
+| `<<<EOT` `<<~EOT` `<<EOF` | PHP, Ruby, shell, Perl | dòng chỉ có đúng nhãn kết thúc |
+| `[[...]]` `[=[...]=]` | Lua | dấu ngoặc đóng đối ứng |
+| `@"..."@` `@'...'@` | PowerShell | dấu đóng here-string |
+| `%q{}` `%Q()` `%w[]` `q()` `qq()` | Ruby, Perl | dấu đóng do chính người viết chọn |
 
-Dấu gạch chéo ngược giờ được tính khi đi tìm dấu đóng của chuỗi, nên `\"""` là một dấu nháy được
-thoát chứ không phải chỗ chuỗi kết thúc - đúng như CPython đọc nó.
+</details>
 
-Khi một chỉ thị ( hoặc một baseline ) gỡ được phát hiện nào ra khỏi báo cáo, **bản SARIF và bản
-Markdown cũng nói ra**, dưới mã `findings-suppressed`. Trước đây chỉ màn hình console đếm, còn SARIF
-- tức là đường đi vào code scanning của CI - xuất ra một tệp rỗng không phân biệt được với một lượt
-quét sạch thật sự.
+### Khi phạm vi quét bị thu hẹp, báo cáo phải nói ra
 
-Nếu ae quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi ( tắt rule, loại trừ
-đường dẫn, nâng ngưỡng, hạ giới hạn kích thước… ), công cụ **nói rõ nó đã tắt những gì**. Một báo cáo
-"sạch" sinh ra từ cấu hình của người khác sẽ không im lặng nữa.
+Nếu anh em quên tắt: khi `.fortress-scan.json` trong cây được quét làm hẹp phạm vi ( tắt rule,
+loại trừ đường dẫn, nâng ngưỡng ), công cụ **nói rõ nó đã tắt những gì**. Một báo cáo "sạch" sinh
+ra từ cấu hình của người khác sẽ không im lặng nữa.
 
-`.gitignore` và `.fortress-scanignore` cũng vậy: hễ chúng gỡ được **tệp mã nguồn** nào ra khỏi lượt
-quét thì báo cáo nói ra số tệp và số thư mục bị gỡ. Một dòng `app/session.py` trong `.gitignore` là
-đủ để giấu đúng cái tệp có lỗ hổng, mà mọi con số còn lại trong báo cáo vẫn trông bình thường - nên
-chỗ này không được im. Cái gì chính anh em gạt bằng `--exclude` thì không bị cảnh báo lại, vì đó là
-quyết định của anh em chứ không phải của repo lạ.
+`.gitignore` và `.fortress-scanignore` cũng vậy: hễ chúng gỡ được **tệp mã nguồn** nào ra khỏi
+lượt quét thì báo cáo nói ra số tệp và số thư mục bị gỡ. Một dòng `app/session.py` trong
+`.gitignore` là đủ để giấu đúng cái tệp có lỗ hổng, nên chỗ này không được im.
 
-Quan trọng là cảnh báo này **có mặt ở mọi định dạng**, không riêng màn hình - ai chạy `-f json -o
-bao-cao.json` hay đẩy SARIF lên GitHub code scanning thường không đọc stderr:
+Quan trọng là cảnh báo này **có mặt ở mọi định dạng**, không riêng màn hình:
 
 | Định dạng | Cảnh báo nằm ở |
-| --- | --- |
+| :--- | :--- |
 | console | khối `CẢNH BÁO` ngay trên phần tổng kết, không cần `-v` |
 | JSON | mảng `notices` ở cấp cao nhất |
 | SARIF | `runs[].invocations[].toolExecutionNotifications` |
 | Markdown | mục `⚠️ Phạm vi quét đã bị thu hẹp`, đặt trước phần phát hiện |
 
-Vẫn in ra stderr như cũ nữa, nên script cũ của anh em không hư hỏng gì.
-
-Cùng chỗ đó còn báo luôn **số tệp bị bỏ qua** và **số liên kết chưa đi theo** - những mảng mã chưa
-từng được soi, trước đây chỉ nằm im dưới dạng một con số trong JSON.
-
-Phần tổng kết còn thêm **số thư mục bị bỏ theo danh sách loại trừ mặc định** ( `node_modules`,
-`dist`, `build`, `vendor`… ). Cái này là quyết định của công cụ chứ không phải của repo nên nó chỉ
-là một dòng thống kê, không phải `CẢNH BÁO` - nhưng ai đang đọc mã lạ thì nên liếc qua, vì `dist/`
-là chỗ đầu tiên người ta nghĩ tới khi muốn giấu một tệp.
-
-Muốn CI chặn hẳn thì thêm `--fail-on-coverage-reduction`: hễ có thứ gì làm hẹp phạm vi quét là thoát
-`1`, kể cả khi không tìm ra lỗi nào. Mặc định cờ này **tắt**, nên mã thoát của anh em không đổi nếu
-không tự bật.
+Muốn CI chặn hẳn thì thêm `--fail-on-coverage-reduction`: hễ có thứ gì làm hẹp phạm vi quét là
+thoát `1`, kể cả khi không tìm ra lỗi nào. Mặc định cờ này **tắt**, nên mã thoát của anh em không
+đổi nếu không tự bật.
 
 ---
 
-## Góp ý & báo lỗi
-Do đây là dự án đầu tay của mình nên sẽ không tránh khỏi những thiếu sót nên hy vọng anh em có phát 
-hiện gì thì hãy báo với mình qua mail ( vophuvinh15012007@gmail.com ) hoặc kênh liên lạc trực tiếp. 
+## 🎯 Mục đích
 
-Để chuyên nghiệp hơn xíu thì khi báo lỗi anh em kèm giúp mình: **phiên bản công cụ**, **hệ điều hành**, và 
-**một đoạn mã tối thiểu tái hiện được lỗi** để mình hiểu rõ hơn về vấn đề cũng như thuận tiện cho việc fix nhé
+Đây là **dự án cá nhân**, viết ra vì mong muốn anh em dev Việt Nam có một công cụ **tiếng Việt**
+để soi lại code **trước khi đưa lên production**.
+
+Nó tồn tại như **một lớp tham khảo thêm** bên cạnh việc tự review, mà không phải tìm một người
+khác pentest hoặc thậm chí phải dùng AI agent để scan lại ( làm tốn token quý giá của anh em ).
+Không cần cấu hình, chỉ ra chỗ đáng ngờ kèm đường đi của dữ liệu, rồi phần còn lại toàn quyền xử
+lý của anh em.
+
+---
+
+## 🤝 Góp ý và báo lỗi
+
+Do đây là dự án đầu tay của mình nên sẽ không tránh khỏi những thiếu sót, nên hy vọng anh em có
+phát hiện gì thì hãy báo với mình qua mail ( **vophuvinh15012007@gmail.com** ) hoặc kênh liên lạc
+trực tiếp.
+
+Để chuyên nghiệp hơn xíu thì khi báo lỗi anh em kèm giúp mình:
+
+- 📌 **phiên bản công cụ**
+- 💻 **hệ điều hành**
+- 🧩 **một đoạn mã tối thiểu tái hiện được lỗi**
+
+để mình hiểu rõ hơn về vấn đề cũng như thuận tiện cho việc fix nhé.
 
 Mình đọc và phản hồi tất cả, chỉ là có thể hơi chậm.
 
-### Chân thành cảm ơn anh em rất nhiều.
+### Chân thành cảm ơn anh em rất nhiều 💚
 
 ---
 
-## Tác giả & lời cảm ơn
+## 👤 Tác giả và lời cảm ơn
 
-Được viết bởi **[fortress07](https://github.com/fortress07)** - là một dự án cá nhân.
+Được viết bởi **[fortress07](https://github.com/fortress07)**, là một dự án cá nhân.
 
-Dự án có **sự hỗ trợ của AI** (Claude) trong quá trình tham khảo cách triển khai và đẩy nhanh tiến
-độ: phác thảo kiến trúc, sinh mã cho các engine phân tích, viết bộ test và soạn tài liệu. Toàn bộ
-hướng đi, yêu cầu, quyết định thiết kế và việc kiểm thử đều do mình điều hướng và rà soát. Mình
-ghi rõ điều này vì cho rằng người dùng có quyền biết mã họ đang chạy được tạo ra như thế nào.
+Dự án có **sự hỗ trợ của AI** ( Claude ) trong quá trình tham khảo cách triển khai và đẩy nhanh
+tiến độ: phác thảo kiến trúc, sinh mã cho các engine phân tích, viết bộ test và soạn tài liệu.
+Toàn bộ hướng đi, yêu cầu, quyết định thiết kế và việc kiểm thử đều do mình điều hướng và rà soát.
+Mình ghi rõ điều này vì cho rằng người dùng có quyền biết mã họ đang chạy được tạo ra như thế nào.
 
-Cảm ơn anh em đã dành thời gian đọc tới đây và tin dùng Fortress Scan. Nếu công cụ giúp ích được cho
-anh em, một ngôi sao trên GitHub của mọi người là nguồn động viên rất lớn đối với mình.
+Cảm ơn anh em đã dành thời gian đọc tới đây và tin dùng Fortress Scan. Nếu công cụ giúp ích được
+cho anh em, một ngôi sao ⭐ trên GitHub của mọi người là nguồn động viên rất lớn đối với mình.
 
 ---
 
-## Giấy phép
+## 📄 Giấy phép
 
-[MIT](LICENSE) - dùng tự do cho cả mục đích cá nhân và thương mại.
- 
-Không được dùng để bán, cung cấp cho các dịch vụ trả phí hoặc các 
-hành vi dùng cho mục đích xấu.
+[MIT](LICENSE), dùng tự do cho cả mục đích cá nhân và thương mại.
+
+Không được dùng để bán, cung cấp cho các dịch vụ trả phí hoặc các hành vi dùng cho mục đích xấu.

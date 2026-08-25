@@ -441,13 +441,27 @@ def _readme_text() -> str:
 
 
 def test_readme_states_the_real_rule_count():
-    """README da tung ghi 26 rule trong khi registry co 27; khoa lai de khong lech nua."""
+    """README da tung ghi 26 rule trong khi registry co 27; khoa lai de khong lech nua.
+
+    README bay gio noi con so nay o nhieu cho ( badge, the thong ke, tieu de muc,
+    tieu de bieu do ). Kiem TAT CA cung mot luc, vi mot cho lech thi nguoi doc
+    van thay con so sai o cho con lai.
+    """
     registered = len(list(all_rules()))
-    declared = re.search(r"\*\*(\d+) rule,", _readme_text())
-    assert declared is not None, "README khong con cau '**N rule,' de doi chieu"
-    assert int(declared.group(1)) == registered, (
-        "README ghi %s rule nhung registry co %d" % (declared.group(1), registered)
-    )
+    text = _readme_text()
+    spots = {
+        "badge": r"badge/(\d+)-rule",
+        "the thong ke": r"<b>(\d+)</b><br/><sub>rule</sub>",
+        "tieu de muc": r"##.*?(\d+) rule trên",
+        "tieu de bieu do": r"title (\d+) rule",
+    }
+    seen = {}
+    for label, pattern in spots.items():
+        match = re.search(pattern, text)
+        assert match is not None, "README khong con cho '%s' de doi chieu" % label
+        seen[label] = int(match.group(1))
+    lech = {k: v for k, v in seen.items() if v != registered}
+    assert not lech, "registry co %d rule nhung README ghi khac o: %s" % (registered, lech)
 
 
 def test_readme_lists_every_registered_rule_id():
