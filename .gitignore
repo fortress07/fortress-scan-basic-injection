@@ -18,3 +18,4 @@ htmlcov/
 fortress_scan-report.*
 .fortress-scan-baseline.json
 .zcode/
+diagram-preview.html

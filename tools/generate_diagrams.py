@@ -1,12 +1,20 @@
 """Sinh bộ hình minh hoạ cho README, mỗi hình hai bản sáng và tối.
 
-Vì sao phải SINH ra chứ không vẽ tay một lần rồi thôi: mọi con số trên hình đều
-lấy thẳng từ `core.registry`, nên thêm hay bớt một rule là hình tự lệch theo mã
-chứ không âm thầm nói sai. `tests/test_diagrams.py` chạy lại script này rồi so
-từng byte với tệp đã commit, nên hình không thể cũ hơn mã.
+Vì sao phải SINH ra chứ không vẽ tay: mọi con số trên hình đều lấy thẳng từ
+`core.registry`, nên thêm hay bớt một rule là hình tự lệch theo mã chứ không âm
+thầm nói sai. `tests/test_diagrams.py` chạy lại script này rồi so từng byte với
+tệp đã commit, nên hình không thể cũ hơn mã.
 
 Số đo hiệu năng thì không suy ra được từ mã, nên chúng nằm trong `MEASUREMENTS`
-kèm cả trung vị, khoảng min/max và số lần lặp. Đo lại thì sửa ở đúng một chỗ.
+kèm cả trung vị và số lần lặp. Đo lại thì sửa ở đúng một chỗ.
+
+HAI LUẬT VẼ, và cả hai đều có lý do:
+
+* **Không vẽ nền.** SVG để trong suốt rồi thả thẳng lên nền của GitHub. Vẽ một
+  ô nền trắng thì ở chế độ tối nó thành một tấm thẻ chói mắt dán giữa trang.
+* **Panel tô bằng chính màu nhấn ở độ mờ thấp**, viền cùng màu đậm hơn một
+  chút, kèm một vạch dọc bên trái. Cách này đọc được trên cả nền sáng lẫn nền
+  tối mà không cần một màu xám riêng cho từng chế độ.
 
 Chạy:  python tools/generate_diagrams.py
 """
@@ -25,64 +33,65 @@ from fortress_scan.core.registry import all_rules  # noqa: E402
 
 OUT = ROOT / "docs" / "img"
 
-FONT = "'Segoe UI',system-ui,-apple-system,Helvetica,Arial,sans-serif"
-MONO = "'Cascadia Code','SF Mono',Consolas,'Liberation Mono',monospace"
+FONT = "Segoe UI, system-ui, -apple-system, sans-serif"
+MONO = "Cascadia Code, SF Mono, Consolas, monospace"
+
+# Bề rộng chung. Phần nội dung README của GitHub rộng khoảng ngần này, nên vẽ
+# đúng cỡ thì chữ không bị thu nhỏ rồi nhoè.
+W = 900
+PAD = 24
 
 
 # --------------------------------------------------------------------------
 # Bảng màu. Hai bản đối xứng nhau để cùng một hình đọc được ở cả hai chế độ.
+# Không có khoá "bg": hình không bao giờ tự vẽ nền cho mình.
 # --------------------------------------------------------------------------
 
 THEMES: Dict[str, Dict[str, str]] = {
     "light": {
-        "bg": "#ffffff",
-        "panel": "#f6f8fa",
-        "panel2": "#eaeef2",
-        "border": "#d1d9e0",
-        "text": "#1f2328",
-        "muted": "#59636e",
-        "red": "#cf222e",
-        "orange": "#bc4c00",
-        "yellow": "#9a6700",
-        "blue": "#0969da",
-        "green": "#1a7f37",
-        "purple": "#8250df",
-        "teal": "#0e7490",
-        "pink": "#bf3989",
-        "on_accent": "#ffffff",
+        "text": "#1c2233",
+        "muted": "#525d75",
+        "grid": "#c9cfdd",
+        "red": "#b0201a",
+        "orange": "#9a5200",
+        "yellow": "#8a6100",
+        "green": "#0c7268",
+        "blue": "#3730c9",
+        "purple": "#7233a8",
+        "pink": "#b81d63",
     },
     "dark": {
-        "bg": "#0d1117",
-        "panel": "#161b22",
-        "panel2": "#21262d",
-        "border": "#30363d",
-        "text": "#e6edf3",
-        "muted": "#9198a1",
-        "red": "#f85149",
-        "orange": "#db6d28",
-        "yellow": "#d29922",
-        "blue": "#388bfd",
-        "green": "#3fb950",
-        "purple": "#a371f7",
-        "teal": "#39a0b0",
-        "pink": "#db61a2",
-        "on_accent": "#ffffff",
+        "text": "#e9eef8",
+        "muted": "#a3aec6",
+        "grid": "#2b3546",
+        "red": "#ff8585",
+        "orange": "#ffc255",
+        "yellow": "#ffd479",
+        "green": "#4cd8c2",
+        "blue": "#93a2ff",
+        "purple": "#d3a4ff",
+        "pink": "#ff8ac0",
     },
 }
 
+# Độ mờ dùng chung cho lối vẽ panel.
+FILL_TINT = "0.11"
+STROKE_TINT = "0.50"
+BAR_TINT = "0.95"
+TRACK_TINT = "0.20"
+
 
 # --------------------------------------------------------------------------
-# Số đo. Máy đo: Windows 11, CPython 3.13. Mỗi phép lặp 7 lần, lấy trung vị.
+# Số đo. Máy đo: Windows 11, CPython 3.13. Mỗi phép lặp 7 lần, lấy trung vị,
+# chạy trên đúng hai commit trước và sau khi vá với cùng một bộ fixture.
 # --------------------------------------------------------------------------
 
 MEASUREMENTS = {
     "ignore_realistic_us": {
         "label": "So khớp .gitignore thật",
-        "unit": "µs / entry",
+        "unit": "micro-giây mỗi entry",
         "before": 1299.30,
         "after": 34.93,
-        "before_range": (1266.99, 1369.20),
-        "after_range": (34.57, 39.45),
         "note": "bộ mẫu Python + Node của GitHub, 74 dòng",
     },
     "attack_scan_s": {
@@ -90,8 +99,6 @@ MEASUREMENTS = {
         "unit": "giây",
         "before": 26.14,
         "after": 6.16,
-        "before_range": (22.70, 26.47),
-        "after_range": (5.78, 6.80),
         "note": ".gitignore 15 KB hợp lệ, 60 tệp sâu 14 cấp",
     },
     "ignore_peak_mb": {
@@ -99,8 +106,6 @@ MEASUREMENTS = {
         "unit": "MB",
         "before": 378.24,
         "after": 0.04,
-        "before_range": (378.24, 378.24),
-        "after_range": (0.035, 0.035),
         "note": "tệp gồm TOÀN dòng chú thích, không sinh quy tắc nào",
     },
     "selfscan_s": {
@@ -108,8 +113,6 @@ MEASUREMENTS = {
         "unit": "giây",
         "before": 3.14,
         "after": 3.38,
-        "before_range": (2.98, 3.77),
-        "after_range": (3.14, 3.41),
         "note": "khoảng đo chồng nhau, tức là không đổi",
     },
 }
@@ -128,12 +131,18 @@ def esc(text: str) -> str:
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        .replace("'", "&apos;")
     )
 
 
+def num(value) -> str:
+    """Số gọn và ỔN ĐỊNH giữa các lần chạy, để phép so từng byte còn có nghĩa."""
+    text = "%.1f" % float(value)
+    return text[:-2] if text.endswith(".0") else text
+
+
 class Canvas:
-    def __init__(self, width: int, height: int, theme: str) -> None:
+    def __init__(self, height: int, theme: str, width: int = W) -> None:
         self.width = width
         self.height = height
         self.theme = theme
@@ -141,80 +150,97 @@ class Canvas:
         self.parts: List[str] = []
 
     def rect(self, x, y, w, h, fill, rx=0, stroke=None, sw=1, opacity=None):
-        extra = ' stroke="%s" stroke-width="%s"' % (stroke, sw) if stroke else ""
+        extra = ""
+        if stroke:
+            extra += " stroke='%s' stroke-width='%s'" % (stroke, num(sw))
         if opacity is not None:
-            extra += ' opacity="%s"' % opacity
+            extra += " opacity='%s'" % opacity
         self.parts.append(
-            '<rect x="%s" y="%s" width="%s" height="%s" rx="%s" fill="%s"%s/>'
-            % (x, y, w, h, rx, fill, extra)
+            "<rect x='%s' y='%s' width='%s' height='%s' rx='%s' fill='%s'%s/>"
+            % (num(x), num(y), num(w), num(h), rx, fill, extra)
         )
 
-    def text(self, x, y, s, size=14, fill=None, weight="normal", anchor="start",
+    def panel(self, x, y, w, h, accent, rx=10, bar=True):
+        """Tấm nền tô bằng chính màu nhấn, đọc được trên cả hai chế độ màu."""
+        self.rect(x, y, w, h, accent, rx=rx, opacity=FILL_TINT)
+        self.rect(x, y, w, h, "none", rx=rx, stroke=accent, sw=1.4,
+                  opacity=STROKE_TINT)
+        if bar:
+            self.rect(x, y, 4, h, accent, rx=2, opacity=BAR_TINT)
+
+    def track(self, x, y, w, h, accent):
+        """Rãnh nền của một thanh đo."""
+        self.rect(x, y, w, h, accent, rx=h / 2, opacity=TRACK_TINT)
+
+    def text(self, x, y, s, size=11, fill=None, weight="400", anchor="start",
              font=None, opacity=None):
-        extra = ' opacity="%s"' % opacity if opacity is not None else ""
+        extra = " opacity='%s'" % opacity if opacity is not None else ""
         self.parts.append(
-            '<text x="%s" y="%s" font-family="%s" font-size="%s" font-weight="%s" '
-            'fill="%s" text-anchor="%s"%s>%s</text>'
-            % (x, y, font or FONT, size, weight, fill or self.c["text"], anchor,
-               extra, esc(s))
+            "<text x='%s' y='%s' font-family='%s' font-size='%s' fill='%s' "
+            "text-anchor='%s' font-weight='%s'%s>%s</text>"
+            % (num(x), num(y), font or FONT, num(size), fill or self.c["text"],
+               anchor, weight, extra, esc(s))
         )
 
-    def line(self, x1, y1, x2, y2, stroke, sw=2, dash=None, marker=False):
-        extra = ' stroke-dasharray="%s"' % dash if dash else ""
-        if marker:
-            extra += ' marker-end="url(#arrow-%s)"' % self.theme
+    def line(self, x1, y1, x2, y2, stroke, sw=1.4, marker=False, opacity=None):
+        extra = " marker-end='url(#a%s)'" % self.theme if marker else ""
+        if opacity is not None:
+            extra += " opacity='%s'" % opacity
         self.parts.append(
-            '<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" stroke-width="%s"'
-            ' stroke-linecap="round"%s/>' % (x1, y1, x2, y2, stroke, sw, extra)
+            "<line x1='%s' y1='%s' x2='%s' y2='%s' stroke='%s' stroke-width='%s'"
+            " stroke-linecap='round'%s/>"
+            % (num(x1), num(y1), num(x2), num(y2), stroke, num(sw), extra)
         )
 
-    def path(self, d, stroke=None, fill="none", sw=2, marker=False):
-        extra = ' marker-end="url(#arrow-%s)"' % self.theme if marker else ""
+    def path(self, d, stroke, sw=1.4, marker=False, opacity=None):
+        extra = " marker-end='url(#a%s)'" % self.theme if marker else ""
+        if opacity is not None:
+            extra += " opacity='%s'" % opacity
         self.parts.append(
-            '<path d="%s" fill="%s" stroke="%s" stroke-width="%s"'
-            ' stroke-linecap="round" stroke-linejoin="round"%s/>'
-            % (d, fill, stroke or "none", sw, extra)
+            "<path d='%s' fill='none' stroke='%s' stroke-width='%s'"
+            " stroke-linecap='round' stroke-linejoin='round'%s/>"
+            % (d, stroke, num(sw), extra)
         )
 
-    def circle(self, cx, cy, r, fill, stroke=None, sw=1):
-        extra = ' stroke="%s" stroke-width="%s"' % (stroke, sw) if stroke else ""
+    def circle(self, cx, cy, r, fill, opacity=None):
+        extra = " opacity='%s'" % opacity if opacity is not None else ""
         self.parts.append(
-            '<circle cx="%s" cy="%s" r="%s" fill="%s"%s/>' % (cx, cy, r, fill, extra)
+            "<circle cx='%s' cy='%s' r='%s' fill='%s'%s/>"
+            % (num(cx), num(cy), num(r), fill, extra)
         )
 
-    def badge(self, x, y, label, fill, text_fill=None, pad=10, size=12, height=22):
-        width = int(len(label) * size * 0.62) + pad * 2
-        self.rect(x, y, width, height, fill, rx=height // 2)
-        self.text(x + width / 2, y + height * 0.71, label, size=size,
-                  fill=text_fill or self.c["on_accent"], weight="600", anchor="middle")
+    def chip(self, x, y, label, accent, size=10, height=19):
+        """Nhãn tròn, tô nhạt cùng màu nhấn chứ không tô đặc."""
+        width = int(len(label) * size * 0.60) + 18
+        self.rect(x, y, width, height, accent, rx=height / 2, opacity="0.16")
+        self.rect(x, y, width, height, "none", rx=height / 2, stroke=accent,
+                  sw=1, opacity="0.45")
+        self.text(x + width / 2, y + height * 0.72, label, size=size,
+                  fill=accent, weight="700", anchor="middle")
         return width
+
+    def title(self, title: str, subtitle: str = "") -> None:
+        self.text(PAD, 30, title, size=14.5, weight="700")
+        if subtitle:
+            self.text(PAD, 52, subtitle, size=11.5, fill=self.c["muted"])
+
+    def footer(self, note: str) -> None:
+        self.text(PAD, self.height - 14, note, size=10.5, fill=self.c["muted"])
 
     def render(self) -> str:
         head = (
-            '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
-            'viewBox="0 0 %d %d" role="img">'
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 %d %d' "
+            "width='%d' height='%d' role='img'>"
             % (self.width, self.height, self.width, self.height)
         )
         defs = (
-            '<defs><marker id="arrow-%s" viewBox="0 0 10 10" refX="9" refY="5" '
-            'markerWidth="6" markerHeight="6" orient="auto-start-reverse">'
-            '<path d="M 0 0 L 10 5 L 0 10 z" fill="%s"/></marker></defs>'
-            % (self.theme, self.c["muted"])
+            "<defs><marker id='a%s' viewBox='0 0 10 10' refX='9' refY='5' "
+            "markerWidth='6' markerHeight='6' orient='auto-start-reverse'>"
+            "<path d='M 0 0 L 10 5 L 0 10 z' fill='%s' opacity='0.75'/>"
+            "</marker></defs>" % (self.theme, self.c["muted"])
         )
-        bg = ('<rect width="%d" height="%d" rx="12" fill="%s"/>'
-              % (self.width, self.height, self.c["bg"]))
-        return head + defs + bg + "".join(self.parts) + "</svg>\n"
-
-
-def title_block(cv: Canvas, title: str, subtitle: str = "") -> None:
-    cv.rect(0, 0, cv.width, 4, cv.c["blue"], rx=0)
-    cv.text(28, 42, title, size=20, weight="700")
-    if subtitle:
-        cv.text(28, 66, subtitle, size=13, fill=cv.c["muted"])
-
-
-def footer(cv: Canvas, note: str) -> None:
-    cv.text(28, cv.height - 16, note, size=11, fill=cv.c["muted"])
+        # Không có rect nền: hình trong suốt, thả thẳng lên nền của GitHub.
+        return head + defs + "\n" + "\n".join(self.parts) + "\n</svg>\n"
 
 
 # --------------------------------------------------------------------------
@@ -223,94 +249,82 @@ def footer(cv: Canvas, note: str) -> None:
 
 
 def diagram_taint_flow(theme: str) -> str:
-    cv = Canvas(1040, 516, theme)
+    cv = Canvas(486, theme)
     c = cv.c
-    title_block(
-        cv,
+    cv.title(
         "Cách công cụ hiểu mã: truy vết đường đi của dữ liệu",
         "Không dò từ khoá. Chỉ báo khi dữ liệu bẩn TỚI ĐƯỢC sink mà chưa bị vô hiệu hoá.",
     )
 
     stages = [
         ("1", "NGUỒN", "chỗ dữ liệu người\nngoài đi vào", c["blue"],
-         "request.args · $_GET\nreq.query · input()"),
+         "request.args\n$_GET · req.query"),
         ("2", "LAN TRUYỀN", "vết bẩn chảy theo\nphép gán và phép nối", c["purple"],
          "gán · nối chuỗi\nf-string · list/dict"),
         ("3", "KHỬ ĐỘC", "hàng rào duy nhất\nxoá được vết bẩn", c["green"],
-         "shlex.quote · escape\ntham số hoá · allowlist"),
+         "shlex.quote\ntham số hoá · allowlist"),
         ("4", "SINK", "API nguy hiểm,\nnơi dữ liệu phát nổ", c["red"],
-         "os.system · cursor.execute\neval · from_string"),
+         "os.system · execute\neval · from_string"),
     ]
 
-    # 4 hộp cộng 3 khe cộng hai lề phải nằm gọn trong bề rộng khung.
-    box_w, box_h, gap = 214, 168, 34
-    x0 = 28
-    y0 = 96
-    for index, (num, name, desc, color, examples) in enumerate(stages):
-        x = x0 + index * (box_w + gap)
-        cv.rect(x, y0, box_w, box_h, c["panel"], rx=12, stroke=c["border"])
-        cv.rect(x, y0, box_w, 5, color, rx=2)
-        cv.circle(x + 26, y0 + 34, 14, color)
-        cv.text(x + 26, y0 + 39, num, size=14, fill=c["on_accent"],
-                weight="700", anchor="middle")
-        cv.text(x + 50, y0 + 39, name, size=15, weight="700", fill=color)
+    box_w, box_h, gap = 192, 156, 26
+    y0 = 84
+    for index, (idx, name, desc, color, examples) in enumerate(stages):
+        x = PAD + index * (box_w + gap)
+        cv.panel(x, y0, box_w, box_h, color)
+        cv.text(x + 18, y0 + 26, idx, size=11, fill=c["muted"], weight="700")
+        cv.text(x + 34, y0 + 26, name, size=13, fill=color, weight="700")
         for line_index, line in enumerate(desc.split("\n")):
-            cv.text(x + 18, y0 + 66 + line_index * 17, line, size=12, fill=c["muted"])
-        cv.rect(x + 14, y0 + 104, box_w - 28, 50, c["panel2"], rx=8)
+            cv.text(x + 18, y0 + 50 + line_index * 15, line, size=10.5,
+                    fill=c["muted"])
+        cv.rect(x + 14, y0 + 92, box_w - 28, 46, color, rx=7, opacity="0.10")
         for line_index, line in enumerate(examples.split("\n")):
-            cv.text(x + 22, y0 + 124 + line_index * 17, line, size=10,
-                    fill=c["text"], font=MONO)
+            cv.text(x + 24, y0 + 112 + line_index * 15, line, size=9.5,
+                    fill=c["text"], font=MONO, opacity="0.90")
         if index < len(stages) - 1:
-            arrow_x = x + box_w + 8
-            cv.line(arrow_x, y0 + box_h / 2, arrow_x + gap - 18, y0 + box_h / 2,
-                    c["muted"], sw=2, marker=True)
+            ax = x + box_w + 6
+            cv.line(ax, y0 + box_h / 2, ax + gap - 14, y0 + box_h / 2,
+                    c["muted"], marker=True, opacity="0.70")
 
-    # Hai lối ra, đặt ngay dưới đúng chặng quyết định ra chúng: hàng rào khử
-    # độc dừng được đường đi, còn tới được sink thì thành phát hiện.
-    stage3_x = x0 + 2 * (box_w + gap)
-    stage4_x = x0 + 3 * (box_w + gap)
-    out_y = y0 + box_h + 34
-    out_h = 56
+    # Hai lối ra, đặt ngay dưới đúng chặng quyết định ra chúng.
+    x3 = PAD + 2 * (box_w + gap)
+    x4 = PAD + 3 * (box_w + gap)
+    out_y, out_h = y0 + box_h + 30, 50
 
-    cv.line(stage3_x + box_w / 2, y0 + box_h, stage3_x + box_w / 2, out_y - 4,
-            c["green"], sw=2, marker=True)
-    cv.rect(stage3_x, out_y, box_w, out_h, c["panel"], rx=10, stroke=c["green"])
-    cv.circle(stage3_x + 24, out_y + 20, 9, c["green"])
-    cv.text(stage3_x + 24, out_y + 24, "✓", size=11, fill=c["on_accent"],
-            weight="700", anchor="middle")
-    cv.text(stage3_x + 42, out_y + 24, "Đã khử độc", size=13, weight="700",
-            fill=c["green"])
-    cv.text(stage3_x + 16, out_y + 45, "im lặng, không báo gì", size=11,
+    cv.line(x3 + box_w / 2, y0 + box_h, x3 + box_w / 2, out_y - 4, c["green"],
+            marker=True, opacity="0.80")
+    cv.panel(x3, out_y, box_w, out_h, c["green"], bar=False)
+    cv.text(x3 + 16, out_y + 21, "Đã khử độc", size=12, fill=c["green"],
+            weight="700")
+    cv.text(x3 + 16, out_y + 38, "im lặng, không báo gì", size=10,
             fill=c["muted"])
 
-    cv.line(stage4_x + box_w / 2, y0 + box_h, stage4_x + box_w / 2, out_y - 4,
-            c["red"], sw=2, marker=True)
-    cv.rect(stage4_x, out_y, box_w, out_h, c["panel"], rx=10, stroke=c["red"])
-    cv.circle(stage4_x + 24, out_y + 20, 9, c["red"])
-    cv.text(stage4_x + 24, out_y + 24, "!", size=11, fill=c["on_accent"],
-            weight="700", anchor="middle")
-    cv.text(stage4_x + 42, out_y + 24, "Thành PHÁT HIỆN", size=13, weight="700",
-            fill=c["red"])
-    cv.text(stage4_x + 16, out_y + 45, "kèm cả đường đi để tự kiểm", size=11,
+    cv.line(x4 + box_w / 2, y0 + box_h, x4 + box_w / 2, out_y - 4, c["red"],
+            marker=True, opacity="0.80")
+    cv.panel(x4, out_y, box_w, out_h, c["red"], bar=False)
+    cv.text(x4 + 16, out_y + 21, "Thành PHÁT HIỆN", size=12, fill=c["red"],
+            weight="700")
+    cv.text(x4 + 16, out_y + 38, "kèm cả đường đi để tự kiểm", size=10,
             fill=c["muted"])
 
-    # Ví dụ thật, để người đọc đối chiếu mô hình với một đoạn mã cụ thể.
-    ex_y = out_y + out_h + 30
-    cv.rect(28, ex_y, 984, 92, c["panel2"], rx=10, stroke=c["border"])
-    cv.text(44, ex_y + 24, "Đường đi mà báo cáo in ra", size=12,
-            weight="700", fill=c["text"])
+    # Ví dụ thật, để đối chiếu mô hình với một đoạn mã cụ thể.
+    ex_y = out_y + out_h + 26
+    cv.rect(PAD, ex_y, W - PAD * 2, 82, c["grid"], rx=10, opacity="0.22")
+    cv.text(PAD + 18, ex_y + 22, "Đường đi mà báo cáo in ra", size=11,
+            weight="700")
     rows = [
         ("dòng 40", "tham số truy vấn HTTP đi vào từ đây", c["blue"]),
         ("dòng 40", "chảy vào biến name", c["purple"]),
         ("dòng 42", "chạy tới cursor.execute()", c["red"]),
     ]
     for index, (where, what, color) in enumerate(rows):
-        row_y = ex_y + 46 + index * 16
-        cv.circle(52, row_y - 4, 4, color)
-        cv.text(66, row_y, where, size=10.5, fill=c["muted"], font=MONO)
-        cv.text(132, row_y, what, size=10.5, fill=c["text"], font=MONO)
+        ry = ex_y + 42 + index * 15
+        cv.circle(PAD + 24, ry - 4, 3.5, color, opacity="0.90")
+        cv.text(PAD + 36, ry, where, size=9.5, fill=c["muted"], font=MONO)
+        cv.text(PAD + 96, ry, what, size=9.5, fill=c["text"], font=MONO,
+                opacity="0.90")
 
-    footer(cv, "Rẽ nhánh thì hai nhánh được gộp lại: nhiễm ở một nhánh là đủ để cảnh báo.")
+    cv.footer("Rẽ nhánh thì hai nhánh được gộp lại: nhiễm ở một nhánh là đủ để cảnh báo.")
     return cv.render()
 
 
@@ -320,71 +334,62 @@ def diagram_taint_flow(theme: str) -> str:
 
 
 def diagram_pipeline(theme: str) -> str:
-    cv = Canvas(1040, 412, theme)
+    cv = Canvas(386, theme)
     c = cv.c
-    title_block(
-        cv,
+    cv.title(
         "Sáu bước xảy ra khi anh em gõ lệnh quét",
         "Bước 1 là lý do anh em trỏ được công cụ vào mã lạ mà không cần dựng sandbox riêng.",
     )
 
     steps = [
         ("1", "Khoá tiến trình", c["red"],
-         "vá đè socket, subprocess,\nos.system, os.fork",
-         "dù có lỗi cũng không\nchạy được mã, không gọi mạng"),
+         "vá đè socket, subprocess, os.system",
+         "dù có lỗi cũng không chạy được mã"),
         ("2", "Tìm tệp", c["orange"],
-         "bỏ thư mục loại trừ, tệp\nnhị phân, tệp quá lớn",
-         "không đi theo liên kết\ntrỏ ra ngoài thư mục đích"),
+         "bỏ thư mục loại trừ, tệp nhị phân",
+         "không đi theo liên kết ra ngoài"),
         ("3", "Đọc và giải mã", c["yellow"],
-         "giải mã đúng theo khai báo\n# coding: của PEP 263",
-         "để thấy đúng thứ\nCPython sẽ chạy"),
+         "giải mã đúng khai báo # coding:",
+         "để thấy đúng thứ CPython sẽ chạy"),
         ("4", "Phân tích", c["green"],
-         "truy vết đường đi\ncủa dữ liệu",
-         "AST cho Python,\nlexer riêng cho ngôn ngữ khác"),
+         "truy vết đường đi của dữ liệu",
+         "AST cho Python, lexer cho phần còn lại"),
         ("5", "Lọc", c["blue"],
-         "chỉ thị ignore, ngưỡng mức độ,\nrule bị tắt, baseline",
-         "mọi thứ làm hẹp phạm vi\nđều bị ghi lại và nói ra"),
+         "chỉ thị ignore, ngưỡng, baseline",
+         "thứ gì làm hẹp phạm vi đều bị nói ra"),
         ("6", "Báo cáo", c["purple"],
-         "console, JSON,\nSARIF, Markdown",
-         "kèm mã thoát\ncho cổng CI"),
+         "console, JSON, SARIF, Markdown",
+         "kèm mã thoát cho cổng CI"),
     ]
 
-    card_w, card_h = 318, 118
-    gap_x, gap_y = 25, 34
-    x0, y0 = 28, 92
-    for index, (num, name, color, what, why) in enumerate(steps):
-        col = index % 3
-        row = index // 3
-        x = x0 + col * (card_w + gap_x)
+    card_w, card_h = 272, 108
+    gap_x, gap_y = 18, 30
+    y0 = 80
+    for index, (idx, name, color, what, why) in enumerate(steps):
+        col, row = index % 3, index // 3
+        x = PAD + col * (card_w + gap_x)
         y = y0 + row * (card_h + gap_y)
-        cv.rect(x, y, card_w, card_h, c["panel"], rx=12, stroke=c["border"])
-        cv.rect(x, y, 5, card_h, color, rx=2)
-        cv.circle(x + 34, y + 30, 14, color)
-        cv.text(x + 34, y + 35, num, size=14, fill=c["on_accent"],
-                weight="700", anchor="middle")
-        cv.text(x + 58, y + 35, name, size=15, weight="700")
-        for line_index, line in enumerate(what.split("\n")):
-            cv.text(x + 20, y + 62 + line_index * 16, line, size=11.5, fill=c["text"])
-        for line_index, line in enumerate(why.split("\n")):
-            cv.text(x + 20, y + 96 + line_index * 14, line, size=10.5,
-                    fill=c["muted"], opacity="0.95")
+        cv.panel(x, y, card_w, card_h, color)
+        cv.text(x + 18, y + 26, idx, size=11, fill=c["muted"], weight="700")
+        cv.text(x + 34, y + 26, name, size=13, fill=color, weight="700")
+        cv.text(x + 18, y + 52, what, size=10.5, fill=c["text"], opacity="0.92")
+        cv.text(x + 18, y + 74, why, size=10, fill=c["muted"])
         if col < 2:
             ax = x + card_w + 4
             cv.line(ax, y + card_h / 2, ax + gap_x - 10, y + card_h / 2,
-                    c["muted"], sw=2, marker=True)
+                    c["muted"], marker=True, opacity="0.70")
 
-    # Nối cuối hàng một xuống đầu hàng hai: ra từ đáy thẻ 3, quét ngang
-    # trong khe giữa hai hàng, rồi đi lên vào đỉnh thẻ 4.
+    # Nối cuối hàng một xuống đầu hàng hai.
     mid_y = y0 + card_h + gap_y / 2
-    end_x = x0 + 2 * (card_w + gap_x) + card_w / 2
-    start_x = x0 + card_w / 2
-    cv.path("M %d %d L %d %d L %d %d L %d %d"
-            % (end_x, y0 + card_h, end_x, mid_y, start_x, mid_y,
-               start_x, y0 + card_h + gap_y - 5),
-            stroke=c["muted"], sw=2, marker=True)
+    end_x = PAD + 2 * (card_w + gap_x) + card_w / 2
+    start_x = PAD + card_w / 2
+    cv.path("M %s %s L %s %s L %s %s L %s %s"
+            % (num(end_x), num(y0 + card_h), num(end_x), num(mid_y),
+               num(start_x), num(mid_y), num(start_x), num(y0 + card_h + gap_y - 5)),
+            c["muted"], marker=True, opacity="0.70")
 
-    footer(cv, "Mỗi tệp có ngân sách node/token riêng, nên một tệp dựng riêng để "
-               "làm treo công cụ sẽ bị cắt chứ không kéo cả lượt quét đi theo.")
+    cv.footer("Mỗi tệp có ngân sách node/token riêng, nên một tệp dựng riêng để làm "
+              "treo công cụ sẽ bị cắt chứ không kéo cả lượt quét đi theo.")
     return cv.render()
 
 
@@ -395,70 +400,67 @@ def diagram_pipeline(theme: str) -> str:
 
 def _fmt(value: float) -> str:
     if value >= 100:
-        return ("%.0f" % value)
+        return "%.0f" % value
     if value >= 10:
         return ("%.1f" % value).replace(".", ",")
-    if value >= 1:
-        return ("%.2f" % value).replace(".", ",")
     return ("%.2f" % value).replace(".", ",")
 
 
 def diagram_benchmarks(theme: str) -> str:
-    cv = Canvas(1040, 520, theme)
+    cv = Canvas(452, theme)
     c = cv.c
-    title_block(
-        cv,
+    cv.title(
         "Bốn phép đo trước và sau khi vá",
         "Mỗi phép lặp %d lần, lấy trung vị. Máy đo: Windows 11, CPython 3.13." % REPS,
     )
 
     keys = ["ignore_realistic_us", "attack_scan_s", "ignore_peak_mb", "selfscan_s"]
-    row_h = 96
-    y0 = 96
-    bar_x = 380
-    # Thanh phải chừa chỗ cho con số ngay sau nó VÀ cho huy hiệu ở mép phải.
-    bar_max = 400
+    row_h = 86
+    y0 = 76
+    bar_x, bar_max = 330, 300
 
     for index, key in enumerate(keys):
         item = MEASUREMENTS[key]
         y = y0 + index * row_h
-        cv.rect(28, y, 984, row_h - 12, c["panel"], rx=10, stroke=c["border"])
-        cv.text(46, y + 26, item["label"], size=14, weight="700")
-        cv.text(46, y + 46, item["note"], size=10.5, fill=c["muted"])
-        cv.text(46, y + 66, "đơn vị: " + item["unit"], size=10.5, fill=c["muted"])
+        before, after = item["before"], item["after"]
+        improved = after < before * 0.9
+        accent = c["green"] if improved else c["muted"]
 
-        before = item["before"]
-        after = item["after"]
+        cv.panel(PAD, y, W - PAD * 2, row_h - 12, accent, bar=False)
+        cv.text(PAD + 18, y + 24, item["label"], size=12, weight="700")
+        cv.text(PAD + 18, y + 42, item["note"], size=10, fill=c["muted"])
+        cv.text(PAD + 18, y + 60, item["unit"], size=10, fill=c["muted"],
+                opacity="0.80")
+
         # Thanh vẽ theo căn bậc hai để chênh lệch hàng nghìn lần vẫn nhìn được,
         # còn con số thật thì luôn in nguyên bên cạnh.
         span = max(before, after) or 1.0
-        w_before = max(6, (before / span) ** 0.5 * bar_max)
-        w_after = max(6, (after / span) ** 0.5 * bar_max)
+        w_before = max(5, (before / span) ** 0.5 * bar_max)
+        w_after = max(5, (after / span) ** 0.5 * bar_max)
 
-        improved = after < before * 0.9
-        after_color = c["green"] if improved else c["blue"]
+        cv.text(bar_x - 10, y + 30, "trước", size=9.5, fill=c["muted"], anchor="end")
+        cv.track(bar_x, y + 20, bar_max, 13, c["grid"])
+        cv.rect(bar_x, y + 20, w_before, 13, c["red"], rx=6.5, opacity="0.85")
+        cv.text(bar_x + bar_max + 12, y + 30, _fmt(before), size=11,
+                fill=c["red"], weight="700")
 
-        cv.text(bar_x - 12, y + 34, "trước", size=11, fill=c["muted"], anchor="end")
-        cv.rect(bar_x, y + 22, w_before, 16, c["red"], rx=8)
-        cv.text(bar_x + w_before + 10, y + 34, _fmt(before), size=12,
-                weight="700", fill=c["red"])
-
-        cv.text(bar_x - 12, y + 62, "sau", size=11, fill=c["muted"], anchor="end")
-        cv.rect(bar_x, y + 50, w_after, 16, after_color, rx=8)
-        cv.text(bar_x + w_after + 10, y + 62, _fmt(after), size=12,
-                weight="700", fill=after_color)
+        cv.text(bar_x - 10, y + 56, "sau", size=9.5, fill=c["muted"], anchor="end")
+        cv.track(bar_x, y + 46, bar_max, 13, c["grid"])
+        cv.rect(bar_x, y + 46, w_after, 13, accent, rx=6.5, opacity="0.85")
+        cv.text(bar_x + bar_max + 12, y + 56, _fmt(after), size=11,
+                fill=accent, weight="700")
 
         if improved:
             ratio = before / after if after else 0
-            label = "nhanh hơn %s lần" % _fmt(ratio) if ratio < 1000 else "gần như bằng 0"
+            label = "nhanh hơn %s lần" % _fmt(ratio)
             if key == "ignore_peak_mb":
                 label = "không còn đọc tệp"
-            cv.badge(858, y + 24, label, c["green"], size=11)
+            cv.chip(742, y + 28, label, c["green"])
         else:
-            cv.badge(858, y + 24, "không đổi", c["muted"], size=11)
+            cv.chip(742, y + 28, "không đổi", c["muted"])
 
-    footer(cv, "Khoảng đo của phép đối chứng chồng lên nhau, nên phần vá không "
-               "làm chậm đường chạy bình thường.")
+    cv.footer("Khoảng đo của phép đối chứng chồng lên nhau, nên phần vá không làm "
+              "chậm đường chạy bình thường.")
     return cv.render()
 
 
@@ -479,63 +481,69 @@ def _family_counts() -> List[Tuple[str, int]]:
 
 
 def diagram_rules(theme: str) -> str:
-    cv = Canvas(1040, 500, theme)
+    cv = Canvas(432, theme)
     c = cv.c
     total = len(list(all_rules()))
-    title_block(
-        cv,
+    cv.title(
         "%d rule, nhìn theo hai chiều" % total,
         "Số lấy thẳng từ core.registry, nên hình không lệch khỏi mã được.",
     )
 
     sev_colors = {
-        "critical": c["red"],
-        "high": c["orange"],
-        "medium": c["yellow"],
-        "low": c["blue"],
-        "info": c["muted"],
+        "critical": c["red"], "high": c["orange"], "medium": c["yellow"],
+        "low": c["blue"], "info": c["muted"],
     }
 
-    # Trái: mức độ nghiêm trọng.
-    cv.rect(28, 92, 470, 380, c["panel"], rx=12, stroke=c["border"])
-    cv.text(50, 122, "Theo mức độ nghiêm trọng", size=14, weight="700")
+    col_w = 414
+    left_x, right_x = PAD, PAD + col_w + 14
+    panel_y, panel_h = 76, 322
 
+    cv.panel(left_x, panel_y, col_w, panel_h, c["grid"], bar=False)
+    cv.text(left_x + 20, panel_y + 26, "Theo mức độ nghiêm trọng", size=12,
+            weight="700")
     severities = _severity_counts()
     top = max(count for _, count in severities)
-    bar_w = 300
+    bar_w = 250
     for index, (name, count) in enumerate(severities):
-        y = 154 + index * 62
-        cv.text(50, y + 16, name, size=13, weight="700", fill=sev_colors[name])
-        cv.text(178, y + 16, "%d rule" % count, size=12, fill=c["muted"])
-        cv.rect(50, y + 26, bar_w, 14, c["panel2"], rx=7)
-        cv.rect(50, y + 26, max(10, bar_w * count / top), 14, sev_colors[name], rx=7)
-        pct = 100.0 * count / total
-        cv.text(50 + bar_w + 12, y + 37, "%d%%" % round(pct), size=11, fill=c["muted"])
+        y = panel_y + 52 + index * 66
+        color = sev_colors[name]
+        cv.text(left_x + 20, y + 14, name, size=12, fill=color, weight="700")
+        cv.text(left_x + 130, y + 14, "%d rule" % count, size=10.5, fill=c["muted"])
+        cv.track(left_x + 20, y + 24, bar_w, 12, c["grid"])
+        cv.rect(left_x + 20, y + 24, max(8, bar_w * count / top), 12, color,
+                rx=6, opacity="0.85")
+        cv.text(left_x + 20 + bar_w + 12, y + 34,
+                "%d%%" % round(100.0 * count / total), size=10, fill=c["muted"])
 
-    # Phải: họ lỗ hổng.
-    cv.rect(518, 92, 494, 380, c["panel"], rx=12, stroke=c["border"])
-    cv.text(540, 122, "Theo họ lỗ hổng", size=14, weight="700")
-
+    cv.panel(right_x, panel_y, col_w, panel_h, c["grid"], bar=False)
+    cv.text(right_x + 20, panel_y + 26, "Theo họ lỗ hổng", size=12, weight="700")
     families = _family_counts()
     shown = families[:8]
     rest = sum(count for _, count in families[8:])
     if rest:
         shown = shown + [("còn lại (%d họ)" % len(families[8:]), rest)]
     fam_top = max(count for _, count in shown)
+    # Không đưa màu lưới vào bảng màu: nó nhạt đúng bằng rãnh nền, nên hàng
+    # nào rơi vào nó thì cả thanh lẫn con số biến mất khỏi hình.
     palette = [c["red"], c["orange"], c["yellow"], c["green"], c["blue"],
-               c["purple"], c["teal"], c["pink"], c["muted"]]
-    fam_bar = 210
+               c["purple"], c["pink"], c["text"]]
+    fam_bar = 150
     for index, (name, count) in enumerate(shown):
-        y = 150 + index * 36
-        color = palette[index % len(palette)]
-        cv.text(540, y + 12, name, size=11.5, fill=c["text"])
-        cv.rect(740, y + 1, fam_bar, 14, c["panel2"], rx=7)
-        cv.rect(740, y + 1, max(8, fam_bar * count / fam_top), 14, color, rx=7)
-        cv.text(740 + fam_bar + 12, y + 12, str(count), size=11,
-                weight="700", fill=color)
+        y = panel_y + 48 + index * 30
+        # Hàng gộp "còn lại" cố ý dùng màu chữ mờ: nó là phần dư, không phải
+        # một họ lỗ hổng để so ngang với các hàng trên.
+        is_rest = rest and index == len(shown) - 1
+        color = c["muted"] if is_rest else palette[index % len(palette)]
+        cv.text(right_x + 20, y + 12, name, size=10.5, fill=c["text"],
+                opacity="0.92")
+        cv.track(right_x + 200, y + 2, fam_bar, 12, c["grid"])
+        cv.rect(right_x + 200, y + 2, max(7, fam_bar * count / fam_top), 12,
+                color, rx=6, opacity="0.85")
+        cv.text(right_x + 200 + fam_bar + 12, y + 12, str(count), size=10.5,
+                fill=color, weight="700")
 
-    footer(cv, "Mỗi rule đều có mẫu mã nguồn thật làm nó bắn, và với đa số là một "
-               "mẫu an toàn tương ứng để chắc nó không kêu bừa.")
+    cv.footer("Mỗi rule đều có mẫu mã nguồn thật làm nó bắn, và với đa số là một mẫu "
+              "an toàn tương ứng để chắc nó không kêu bừa.")
     return cv.render()
 
 
@@ -545,51 +553,41 @@ def diagram_rules(theme: str) -> str:
 
 
 def diagram_owasp(theme: str) -> str:
-    cv = Canvas(1040, 440, theme)
+    cv = Canvas(392, theme)
     c = cv.c
     total = len(list(all_rules()))
-    title_block(
-        cv,
+    cv.title(
         "Đối chiếu OWASP Top 10:2025",
         "Trước đây cả %d rule bị gộp vào đúng hai mục của bản 2021." % total,
     )
 
     counts = Counter(rule.owasp[0] for rule in all_rules())
     rows = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    colors = {
-        "A01": c["purple"],
-        "A02": c["blue"],
-        "A03": c["green"],
-        "A05": c["red"],
-        "A08": c["orange"],
-    }
-    legacy = {
-        "A01": "A01:2021 · A10:2021 (SSRF)",
-        "A02": "A05:2021",
-        "A03": "A08:2021",
-        "A05": "A03:2021",
-        "A08": "A08:2021",
-    }
+    colors = {"A01": c["purple"], "A02": c["blue"], "A03": c["green"],
+              "A05": c["red"], "A08": c["orange"]}
+    legacy = {"A01": "A01:2021 · A10:2021 (SSRF)", "A02": "A05:2021",
+              "A03": "A08:2021", "A05": "A03:2021", "A08": "A08:2021"}
 
     top = max(count for _, count in rows)
-    bar_x, bar_w = 560, 300
+    bar_x, bar_w = 470, 250
     for index, (tag, count) in enumerate(rows):
-        y = 100 + index * 62
+        y = 76 + index * 58
         code = tag.split(":")[0]
         name = tag.split("-", 1)[1]
         color = colors.get(code, c["muted"])
-        cv.rect(28, y, 984, 52, c["panel"], rx=10, stroke=c["border"])
-        cv.badge(44, y + 15, code, color, size=12)
-        cv.text(104, y + 24, name, size=13, weight="700")
-        cv.text(104, y + 41, "nhãn 2021 đi kèm: " + legacy.get(code, ""), size=10.5,
-                fill=c["muted"])
-        cv.rect(bar_x, y + 19, bar_w, 14, c["panel2"], rx=7)
-        cv.rect(bar_x, y + 19, max(10, bar_w * count / top), 14, color, rx=7)
-        cv.text(bar_x + bar_w + 14, y + 31, "%d rule" % count, size=12,
-                weight="700", fill=color)
+        cv.panel(PAD, y, W - PAD * 2, 48, color)
+        cv.chip(PAD + 18, y + 14, code, color)
+        cv.text(PAD + 76, y + 22, name, size=12, weight="700")
+        cv.text(PAD + 76, y + 38, "nhãn 2021 đi kèm: " + legacy.get(code, ""),
+                size=10, fill=c["muted"])
+        cv.track(bar_x, y + 18, bar_w, 12, c["grid"])
+        cv.rect(bar_x, y + 18, max(8, bar_w * count / top), 12, color, rx=6,
+                opacity="0.85")
+        cv.text(bar_x + bar_w + 12, y + 28, "%d rule" % count, size=11,
+                fill=color, weight="700")
 
-    footer(cv, "Nhãn 2021 vẫn giữ nguyên đi kèm, vì mã rule và khoá JSON của bản "
-               "0.1.0 là giao diện ổn định nên chỉ được THÊM vào.")
+    cv.footer("Nhãn 2021 vẫn giữ nguyên đi kèm, vì mã rule và khoá JSON của bản 0.1.0 "
+              "là giao diện ổn định nên chỉ được THÊM vào.")
     return cv.render()
 
 
@@ -616,35 +614,35 @@ LANGUAGE_COVERAGE: Sequence[Tuple[str, str, int, str]] = (
 
 
 def diagram_languages(theme: str) -> str:
-    cv = Canvas(1040, 620, theme)
+    cv = Canvas(536, theme)
     c = cv.c
-    title_block(
-        cv,
+    cv.title(
         "Độ phủ trên %d ngôn ngữ và định dạng" % len(LANGUAGE_COVERAGE),
         "Python có parser AST nên sâu hơn hẳn; phần còn lại phân tích theo token.",
     )
 
-    cv.badge(28, 74, "AST + luồng dữ liệu, theo được taint xuyên file", c["green"], size=11)
-    cv.badge(420, 74, "Lexer theo token, dừng ở ranh giới một hàm", c["blue"], size=11)
+    cv.chip(PAD, 64, "AST + luồng dữ liệu, theo được taint xuyên file", c["green"])
+    cv.chip(PAD + 320, 64, "Lexer theo token, dừng ở ranh giới một hàm", c["blue"])
 
     top = max(count for _, _, count, _ in LANGUAGE_COVERAGE)
-    bar_x, bar_w = 470, 380
+    bar_x, bar_w = 420, 300
     for index, (name, detail, count, kind) in enumerate(LANGUAGE_COVERAGE):
-        y = 112 + index * 35
+        y = 100 + index * 30
         color = c["green"] if kind == "full" else c["blue"]
         if index % 2 == 0:
-            cv.rect(28, y - 4, 984, 32, c["panel"], rx=8)
-        cv.circle(46, y + 11, 5, color)
-        cv.text(62, y + 16, name, size=12.5, weight="700")
-        cv.text(268, y + 16, detail, size=10.5, fill=c["muted"])
-        cv.rect(bar_x, y + 5, bar_w, 13, c["panel2"], rx=6)
-        cv.rect(bar_x, y + 5, max(8, bar_w * count / top), 13, color, rx=6)
+            cv.rect(PAD, y - 4, W - PAD * 2, 27, c["grid"], rx=7, opacity="0.16")
+        cv.circle(PAD + 14, y + 9, 4, color, opacity="0.90")
+        cv.text(PAD + 28, y + 13, name, size=11, weight="700")
+        cv.text(PAD + 210, y + 13, detail, size=10, fill=c["muted"])
+        cv.track(bar_x, y + 3, bar_w, 12, c["grid"])
+        cv.rect(bar_x, y + 3, max(7, bar_w * count / top), 12, color, rx=6,
+                opacity="0.85")
         suffix = " / 35 rule" if kind == "full" else " họ rule"
-        cv.text(bar_x + bar_w + 12, y + 16, "%d%s" % (count, suffix), size=11,
-                weight="700", fill=color)
+        cv.text(bar_x + bar_w + 12, y + 13, "%d%s" % (count, suffix), size=10.5,
+                fill=color, weight="700")
 
-    footer(cv, "Con số của các ngôn ngữ quét theo token đếm theo HỌ rule bắt được, "
-               "không phải theo số rule đăng ký.")
+    cv.footer("Con số của các ngôn ngữ quét theo token đếm theo HỌ rule bắt được, "
+              "không phải theo số rule đăng ký.")
     return cv.render()
 
 
@@ -654,10 +652,9 @@ def diagram_languages(theme: str) -> str:
 
 
 def diagram_analyzers(theme: str) -> str:
-    cv = Canvas(1040, 420, theme)
+    cv = Canvas(376, theme)
     c = cv.c
-    title_block(
-        cv,
+    cv.title(
         "Hai bộ phân tích, hai mức độ sâu",
         "Giá trị 'độ tin cậy' trong báo cáo phản ánh đúng khoảng chênh này.",
     )
@@ -679,22 +676,23 @@ def diagram_analyzers(theme: str) -> str:
         ]),
     ]
 
-    col_w = 484
+    col_w, col_h = 414, 268
     for index, (name, color, badge, rows) in enumerate(columns):
-        x = 28 + index * (col_w + 16)
-        cv.rect(x, 92, col_w, 292, c["panel"], rx=12, stroke=c["border"])
-        cv.rect(x, 92, col_w, 5, color, rx=2)
-        cv.text(x + 22, 126, name, size=16, weight="700", fill=color)
-        cv.badge(x + col_w - 160, 110, badge, color, size=11)
+        x = PAD + index * (col_w + 14)
+        cv.panel(x, 72, col_w, col_h, color)
+        cv.text(x + 20, 100, name, size=14, fill=color, weight="700")
+        cv.chip(x + col_w - 148, 88, badge, color)
         for row_index, (key, value) in enumerate(rows):
-            y = 158 + row_index * 44
-            cv.text(x + 22, y, key, size=10.5, fill=c["muted"])
-            cv.text(x + 22, y + 18, value, size=12.5, fill=c["text"])
+            y = 130 + row_index * 42
+            cv.text(x + 20, y, key, size=9.5, fill=c["muted"])
+            cv.text(x + 20, y + 17, value, size=11.5, fill=c["text"],
+                    opacity="0.92")
             if row_index < len(rows) - 1:
-                cv.line(x + 22, y + 30, x + col_w - 22, y + 30, c["border"], sw=1)
+                cv.line(x + 20, y + 28, x + col_w - 20, y + 28, c["grid"],
+                        sw=1, opacity="0.55")
 
-    footer(cv, "Không phải cứ nhiều ngôn ngữ là phủ đều: chỗ nào nông hơn thì "
-               "báo cáo nói ra bằng độ tin cậy thấp hơn.")
+    cv.footer("Không phải cứ nhiều ngôn ngữ là phủ đều: chỗ nào nông hơn thì báo cáo "
+              "nói ra bằng độ tin cậy thấp hơn.")
     return cv.render()
 
 
@@ -720,7 +718,35 @@ def build() -> Dict[str, str]:
     return result
 
 
-def main() -> int:
+def preview(files: Dict[str, str]) -> str:
+    """Trang xem thử, và là chỗ DUY NHẤT có nền.
+
+    Hình để trong suốt cho hợp với GitHub, nên muốn xem chúng đúng như người
+    đọc sẽ thấy thì phải tự đặt lên hai nền thật. Trang này không đi vào README.
+    """
+    blocks = []
+    for label, background, text_color, theme in (
+        ("NỀN SÁNG", "#ffffff", "#1c2233", "light"),
+        ("NỀN TỐI", "#0d1117", "#e9eef8", "dark"),
+    ):
+        parts = [
+            "<div style='background:%s;padding:24px'>" % background,
+            "<p style='font:600 13px system-ui;color:%s'>%s</p>" % (text_color, label),
+        ]
+        for name in sorted(files):
+            if not name.endswith("-%s.svg" % theme):
+                continue
+            parts.append(
+                "<h3 style='font:600 12px system-ui;color:%s;margin-top:22px'>%s</h3>"
+                % (text_color, name)
+            )
+            parts.append(files[name])
+        parts.append("</div>")
+        blocks.append("".join(parts))
+    return "".join(blocks)
+
+
+def main(argv: Sequence[str] = ()) -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     files = build()
     for name, content in sorted(files.items()):
@@ -728,8 +754,15 @@ def main() -> int:
     # Thông báo giữ nguyên ASCII: console mặc định của Windows chạy bảng mã
     # cp1258, và một dấu tiếng Việt ở đây là đủ để script chết ngay dòng cuối.
     print("generated %d SVG files -> %s" % (len(files), OUT.relative_to(ROOT).as_posix()))
+
+    if "--preview" in argv:
+        # Trang xem thử KHÔNG commit: nó chỉ để mở bằng trình duyệt mà soi hình
+        # trên hai nền thật trước khi đẩy lên.
+        target = ROOT / "diagram-preview.html"
+        target.write_text(preview(files), encoding="utf-8", newline="\n")
+        print("preview page -> %s" % target.name)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
