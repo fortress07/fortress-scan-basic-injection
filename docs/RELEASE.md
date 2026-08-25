@@ -16,13 +16,13 @@ chính xác** và **dấu hiệu để biết là đã đúng**, nên anh em kh�
 | | Giá trị |
 | :--- | :--- |
 | Nhánh đang đứng | `release/0.1.0` |
-| Số commit ở máy | 46 |
+| Số commit ở máy | 48 |
 | Số commit trên `origin/main` | 44 |
 | Nội dung đã có sẵn trên `origin/main` | 33 commit |
-| **Nội dung thật sự MỚI** | **6 commit** |
+| **Nội dung thật sự MỚI** | **8 commit** |
 | Điểm lùi an toàn | nhánh `backup/truoc-khi-viet-lai-lich-su` và tag `backup-before-rewrite` |
 
-Sáu commit mang nội dung mới:
+8 commit mang nội dung mới:
 
 ```
 fix: mười chỗ cho kết quả sai nghiêm trọng, tìm bằng cách tự tấn công
@@ -31,6 +31,8 @@ feat: đối chiếu bộ rule theo OWASP Top 10:2025
 docs: dựng lại README theo hướng trực quan và ghi nhật ký cho 0.1.0
 docs: bảy hình minh hoạ sinh tự động, thay cho các khối chữ trong README
 docs: hướng dẫn phát hành từng bước, viết cho đúng tình trạng kho hiện tại
+docs: bỏ nền của hình minh hoạ, đổi sang lối vẽ tô nhạt theo màu nhấn
+docs: cập nhật lại con số trong hướng dẫn phát hành cho khớp lịch sử hiện tại
 ```
 
 Còn lại là 33 commit cũ **cùng nội dung nhưng khác mã băm** vì đã đổi thông điệp,
@@ -112,7 +114,7 @@ git diff --stat origin/main HEAD | tail -5
 git cherry -v origin/main HEAD | grep "^+"
 ```
 
-Phải thấy đúng **6 dòng dấu `+`** như bảng ở đầu tài liệu. Nhiều hơn hoặc ít hơn
+Phải thấy đúng **8 dòng dấu `+`** như bảng ở đầu tài liệu. Nhiều hơn hoặc ít hơn
 thì dừng lại xem lại, đừng đẩy.
 
 ---
