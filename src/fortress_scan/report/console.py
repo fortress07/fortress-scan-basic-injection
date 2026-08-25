@@ -19,6 +19,15 @@ _STYLES: Dict[str, str] = {
     "good": "\x1b[1;32m",
 }
 
+# Ngữ cảnh của tệp, viết cho người đọc chứ không phải cho máy.
+_CONTEXT_LABELS: Dict[str, str] = {
+    "test": "trong phần kiểm thử",
+    "example": "trong ví dụ/mẫu",
+    "generated": "trong mã do máy sinh",
+    "vendored": "trong mã đi mượn",
+    "documentation": "trong tài liệu",
+}
+
 _MARKS: Dict[str, str] = {
     "critical": "CRIT",
     "high": "HIGH",
@@ -77,21 +86,55 @@ class ConsoleReporter:
             finding.confidence.label,
             ", ".join(finding.cwe) if finding.cwe else "không có CWE",
         )
+        # Ngữ cảnh KHÔNG giấu sau -v. Nó là thứ đổi hẳn cách đọc một dòng
+        # phát hiện -- "critical" trong tests/ và "critical" trong app/ đòi
+        # hai phản ứng khác nhau -- nên nó phải nằm ngay cạnh mức độ.
+        if not finding.context.is_production:
+            meta = "%s | %s" % (
+                meta,
+                _CONTEXT_LABELS.get(finding.context.value, finding.context.value),
+            )
         self._write("        %s" % self._paint(meta, "dim"))
         if finding.snippet:
             self._write("        %s" % self._paint(finding.snippet, "dim"))
-        if self._verbose and finding.trace:
+        if self._verbose:
+            self._render_details(finding)
+
+    def _render_details(self, finding: Finding) -> None:
+        """Phần chỉ hiện khi có -v: đường đi, căn cứ và cách khắc phục."""
+        if finding.trace:
             self._write("        %s" % self._paint("đường đi của dữ liệu:", "dim"))
             for step in finding.trace:
+                location = "dòng %d" % step.line
+                if step.path:
+                    location = "%s của %s" % (location, display_path(step.path))
                 self._write(
                     "          %s %s"
                     % (
-                        self._paint("dòng %d" % step.line, "dim"),
+                        self._paint(location, "dim"),
                         neutralize(step.label),
                     )
                 )
-        if self._verbose and finding.remediation:
+        if finding.evidence:
+            self._write("        %s" % self._paint("căn cứ:", "dim"))
+            for reason in finding.evidence:
+                self._write("          - %s" % self._paint(neutralize(reason), "dim"))
+        if finding.remediation:
             self._write("        %s %s" % (self._paint("khắc phục:", "dim"), finding.remediation))
+
+    def _render_notices(self, result: ScanResult) -> None:
+        """Không giấu sau -v: một báo cáo hẹp đi mà không nói vì sao chính là
+        thứ tạo ra cảm giác an toàn giả."""
+        if not result.notices:
+            return
+        for notice in result.notices:
+            self._write(
+                "  %s %s"
+                % (self._paint(" CẢNH BÁO ", "medium"), neutralize(notice.summary))
+            )
+            for detail in notice.details:
+                self._write("      %s" % self._paint(neutralize(detail), "dim"))
+        self._write()
 
     def _render_summary(self, result: ScanResult) -> None:
         counts = result.counts_by_severity()
@@ -103,6 +146,7 @@ class ConsoleReporter:
         summary = "  ".join(parts) if parts else self._paint("sạch", "good")
         stats = result.stats
         self._write(self._paint("-" * 60, "dim"))
+        self._render_notices(result)
         self._write("  %s" % summary)
         self._write(
             self._paint(
@@ -111,6 +155,18 @@ class ConsoleReporter:
                 "dim",
             )
         )
+        if stats.files_skipped:
+            self._write(
+                self._paint("  %d tệp bị bỏ qua, không được phân tích" % stats.files_skipped, "dim")
+            )
+        if stats.directories_excluded:
+            self._write(
+                self._paint(
+                    "  %d thư mục bị bỏ theo danh sách loại trừ mặc định (node_modules, dist, build…)"
+                    % stats.directories_excluded,
+                    "dim",
+                )
+            )
         if result.suppressed or result.baselined:
             self._write(
                 self._paint(

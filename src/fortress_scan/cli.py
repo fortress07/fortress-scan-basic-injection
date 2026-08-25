@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 from pathlib import Path
-from typing import Optional, Sequence, Set
+from typing import Any, Dict, Optional, Sequence, Set, Tuple
 
 from . import __version__
 from .core import baseline as baseline_module
 from .core.config import (
+    MAX_CONFIG_BYTES,
     Config,
     ConfigError,
     build_config,
+    coverage_reductions,
     find_config_file,
     load_config_file,
 )
-from .core.model import ScanResult, parse_confidence, parse_severity
+from .core import diffscope
+from .core.model import (
+    Confidence,
+    ScanNotice,
+    ScanResult,
+    parse_confidence,
+    parse_severity,
+)
 from .core.registry import all_rules, rules_digest
 from .report import (
     ConsoleReporter,
+    rule_explanation,
     rules_catalogue,
     supports_color,
     to_json,
@@ -26,6 +37,7 @@ from .report import (
 )
 from .security import paths as safe_paths
 from .security import runtime as sandbox
+from .security import text as safe_text
 
 EXIT_CLEAN = 0
 EXIT_FINDINGS = 1
@@ -33,6 +45,18 @@ EXIT_USAGE = 2
 EXIT_INTERNAL = 3
 
 _FORMATS = ("console", "json", "sarif", "markdown")
+
+
+def _stderr(message: str) -> None:
+    """Ghi một dòng ra stderr, đã trung hòa ký tự điều khiển.
+
+    stderr là đường ra duy nhất không đi qua định dạng nào: JSON và SARIF được
+    json.dumps che, thân báo cáo console đi qua neutralize(), còn ở đây chỉ có
+    chuỗi thô. Mà chuỗi thô đó lại hay mang nội dung từ cây bị quét -- đường
+    dẫn tệp, tên khóa và giá trị trong .fortress-scan.json. Chặn tại một chỗ
+    duy nhất, để chỗ gọi không phải tự nhớ.
+    """
+    sys.stderr.write(safe_text.neutralize(message) + "\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,7 +109,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="thoát khác 0 khi có phát hiện đạt mức này (mặc định: medium)",
     )
     selection.add_argument(
+        "--fail-on-confidence",
+        metavar="MUC",
+        help=(
+            "chỉ thoát khác 0 khi phát hiện đạt cả mức --fail-on lẫn độ tin cậy này "
+            "(mặc định: low, tức là mọi phát hiện đủ mức đều tính)"
+        ),
+    )
+    selection.add_argument(
         "--exit-zero", action="store_true", help="luôn thoát 0 kể cả khi có phát hiện"
+    )
+    selection.add_argument(
+        "--fail-on-coverage-reduction",
+        action="store_true",
+        help="thoát khác 0 nếu có thứ gì làm hẹp phạm vi quét (cấu hình trong cây, liên kết bị bỏ)",
     )
     selection.add_argument(
         "--disable", metavar="RULE", action="append", default=[], help="tắt một rule theo mã"
@@ -142,6 +179,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="bỏ qua các chú thích fortress-scan: ignore trong mã được quét",
     )
     behaviour.add_argument(
+        "--no-ignore-files",
+        action="store_true",
+        help="không đọc các tệp .fortress-scanignore trong mã được quét",
+    )
+    behaviour.add_argument(
         "--no-vcs-ignore", action="store_true", help="không đọc các tệp .gitignore"
     )
     behaviour.add_argument(
@@ -149,10 +191,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="coi biến môi trường và tham số dòng lệnh là dữ liệu không tin cậy",
     )
+    behaviour.add_argument(
+        "--no-cross-file",
+        action="store_true",
+        help="không theo dõi dữ liệu Python chảy qua ranh giới tệp (mỗi tệp tự quét)",
+    )
+    behaviour.add_argument(
+        "--diff",
+        metavar="PATCH",
+        help=(
+            "chỉ báo phát hiện chạm vào dòng đã đổi trong một unified diff "
+            "(dùng - để đọc từ stdin); tạo bằng: git diff --unified=0 origin/main... > p.patch"
+        ),
+    )
+    behaviour.add_argument(
+        "--no-context-demotion",
+        action="store_true",
+        help=(
+            "không hạ độ tin cậy cho phát hiện nằm trong test, ví dụ, mã sinh hay mã đi mượn"
+        ),
+    )
 
     information = parser.add_argument_group("thông tin")
     information.add_argument(
         "--list-rules", action="store_true", help="in danh mục rule rồi thoát"
+    )
+    information.add_argument(
+        "--explain",
+        metavar="RULE",
+        help="in giải thích đầy đủ của một rule (vì sao nguy hiểm, cách sửa) rồi thoát",
     )
     information.add_argument(
         "--rules-digest", action="store_true", help="in mã băm của bộ rule rồi thoát"
@@ -179,26 +246,41 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.list_rules:
         sys.stdout.write(rules_catalogue())
         return EXIT_CLEAN
+    if args.explain:
+        try:
+            sys.stdout.write(rule_explanation(args.explain.strip().upper()))
+        except KeyError:
+            _stderr("fortress-scan: không có rule với mã: %s" % args.explain)
+            return EXIT_USAGE
+        return EXIT_CLEAN
     if args.rules_digest:
         sys.stdout.write(rules_digest() + "\n")
         return EXIT_CLEAN
 
     sandbox.engage()
     for warning in sandbox.elevated_privilege_warnings():
-        sys.stderr.write("fortress-scan: cảnh báo: %s\n" % warning)
+        _stderr("fortress-scan: cảnh báo: %s" % warning)
 
     try:
-        config = _resolve_config(args)
-    except (ConfigError, ValueError) as exc:
-        sys.stderr.write("fortress-scan: %s\n" % exc)
+        config, config_notices = _resolve_config(args)
+    except (ConfigError, ValueError, safe_paths.PathConfinementError) as exc:
+        _stderr("fortress-scan: %s" % exc)
         return EXIT_USAGE
+    if config_notices:
+        _stderr("fortress-scan: cảnh báo: %s" % config_notices[0])
+        for detail in config_notices[1:]:
+            _stderr("    %s" % detail)
 
     baseline_fingerprints: Set[str] = set()
     if args.baseline:
         try:
-            baseline_fingerprints = baseline_module.load(Path(args.baseline))
-        except baseline_module.BaselineError as exc:
-            sys.stderr.write("fortress-scan: %s\n" % exc)
+            baseline_fingerprints = baseline_module.load(
+                safe_paths.validate_input_path(
+                    args.baseline, "tệp baseline", baseline_module.MAX_BASELINE_BYTES
+                )
+            )
+        except (baseline_module.BaselineError, safe_paths.PathConfinementError) as exc:
+            _stderr("fortress-scan: %s" % exc)
             return EXIT_USAGE
 
     output_path: Optional[Path] = None
@@ -206,7 +288,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             output_path = safe_paths.validate_output_path(args.output)
         except safe_paths.PathConfinementError as exc:
-            sys.stderr.write("fortress-scan: %s\n" % exc)
+            _stderr("fortress-scan: %s" % exc)
             return EXIT_USAGE
 
     baseline_path: Optional[Path] = None
@@ -214,53 +296,89 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             baseline_path = safe_paths.validate_output_path(args.write_baseline)
         except safe_paths.PathConfinementError as exc:
-            sys.stderr.write("fortress-scan: %s\n" % exc)
+            _stderr("fortress-scan: %s" % exc)
             return EXIT_USAGE
 
     from .core.engine import scan
 
+    scan_notices = (
+        [
+            ScanNotice(
+                kind="project-config",
+                summary=config_notices[0],
+                details=tuple(config_notices[1:]),
+            )
+        ]
+        if config_notices
+        else []
+    )
+
     try:
-        result = scan(args.target, config, baseline_fingerprints)
+        result = scan(args.target, config, baseline_fingerprints, scan_notices)
     except safe_paths.PathConfinementError as exc:
-        sys.stderr.write("fortress-scan: %s\n" % exc)
+        _stderr("fortress-scan: %s" % exc)
         return EXIT_USAGE
     except KeyboardInterrupt:
-        sys.stderr.write("fortress-scan: đã dừng theo yêu cầu\n")
+        _stderr("fortress-scan: đã dừng theo yêu cầu")
         return EXIT_INTERNAL
     except Exception as exc:
-        sys.stderr.write("fortress-scan: lỗi nội bộ: %s: %s\n" % (type(exc).__name__, exc))
+        _stderr("fortress-scan: lỗi nội bộ: %s: %s" % (type(exc).__name__, exc))
         return EXIT_INTERNAL
 
     if baseline_path is not None:
         try:
             baseline_path.write_text(baseline_module.serialize(result.findings), encoding="utf-8")
         except OSError as exc:
-            sys.stderr.write("fortress-scan: không ghi được baseline: %s\n" % exc)
+            _stderr("fortress-scan: không ghi được baseline: %s" % exc)
             return EXIT_USAGE
 
-    if not args.quiet:
-        try:
-            _emit(result, args, output_path)
-        except OSError as exc:
-            sys.stderr.write("fortress-scan: không ghi được báo cáo: %s\n" % exc)
-            return EXIT_USAGE
+    # --quiet chỉ im lặng phần người đọc: tệp -o và định dạng máy (json/sarif/
+    # markdown ra stdout) là sản phẩm anh em yêu cầu bằng cờ, nên phải có mặt
+    # dù có --quiet - kẻo CI gõ `-f json --quiet | jq` lại nhận chuỗi rỗng.
+    try:
+        _emit(result, args, output_path)
+    except OSError as exc:
+        _stderr("fortress-scan: không ghi được báo cáo: %s" % exc)
+        return EXIT_USAGE
 
     if args.exit_zero:
         return EXIT_CLEAN
-    highest = result.highest_severity()
-    if highest is not None and highest >= config.fail_on:
+    # Kiểm trước cả ngưỡng mức độ: một lượt quét bị bóp hẹp thì con số "không
+    # có phát hiện nào" chưa nói lên được điều gì.
+    if args.fail_on_coverage_reduction and result.notices:
         return EXIT_FINDINGS
+    gate = Confidence.LOW
+    if args.fail_on_confidence:
+        gate = parse_confidence(args.fail_on_confidence)
+    # Ngưỡng thoát soi TỪNG phát hiện: một phát hiện critical nhưng độ tin cậy
+    # thấp không được kéo cả cổng CI xuống nếu người dùng đã nói rõ họ chỉ
+    # chặn theo phát hiện chắc chắn. Lấy mức cao nhất rồi so riêng từng ngưỡng
+    # là trộn hai phát hiện khác nhau thành một cái không tồn tại.
+    for finding in result.findings:
+        if finding.severity >= config.fail_on and finding.confidence >= gate:
+            return EXIT_FINDINGS
     return EXIT_CLEAN
 
 
 def _emit(result: ScanResult, args: argparse.Namespace, output_path: Optional[Path]) -> None:
-    if args.format == "console" and output_path is None:
-        reporter = ConsoleReporter(
-            sys.stdout,
-            color=supports_color(sys.stdout) and not args.no_color,
-            verbose=args.verbose,
-        )
-        reporter.render(result)
+    if args.format == "console":
+        if output_path is None:
+            if args.quiet:
+                return
+            reporter = ConsoleReporter(
+                sys.stdout,
+                color=supports_color(sys.stdout) and not args.no_color,
+                verbose=args.verbose,
+            )
+            reporter.render(result)
+            return
+        # Trước đây nhánh này rơi vào markdown: người dùng xin console mà nhận
+        # về markdown thì không khác nào đổi sản phẩm sau lưng.
+        buffer = io.StringIO()
+        ConsoleReporter(buffer, color=False, verbose=args.verbose).render(result)
+        output_path.write_text(buffer.getvalue(), encoding="utf-8")
+        if not args.quiet:
+            _stderr("fortress-scan: đã ghi báo cáo vào %s" % output_path)
         return
 
     if args.format == "json":
@@ -274,22 +392,52 @@ def _emit(result: ScanResult, args: argparse.Namespace, output_path: Optional[Pa
         sys.stdout.write(payload)
         return
     output_path.write_text(payload, encoding="utf-8")
-    sys.stderr.write("fortress-scan: đã ghi báo cáo vào %s\n" % output_path)
+    if not args.quiet:
+        _stderr("fortress-scan: đã ghi báo cáo vào %s" % output_path)
 
 
-def _resolve_config(args: argparse.Namespace) -> Config:
+def _config_from_file(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
+    """Nạp tệp cấu hình, kèm cảnh báo nếu nó tự tìm thấy trong cây bị quét."""
     config = Config()
-    if not args.no_config:
-        source: Optional[Path] = None
-        if args.config:
-            source = Path(args.config)
-            if not source.is_file():
-                raise ConfigError("không tìm thấy tệp cấu hình: %s" % args.config)
-        else:
-            target = Path(args.target)
-            source = find_config_file(target if target.exists() else Path("."))
-        if source is not None:
-            config = build_config(load_config_file(source), config)
+    if args.no_config:
+        return config, ()
+    if args.config:
+        source = safe_paths.validate_input_path(
+            args.config, "tệp cấu hình", MAX_CONFIG_BYTES
+        )
+        return build_config(load_config_file(source), config), ()
+    target = Path(args.target)
+    source = find_config_file(target if target.exists() else Path("."))
+    if source is None:
+        return config, ()
+    # Tệp cấu hình được TÌM THẤY trong cây bị quét, không phải do người dùng
+    # chỉ định, nên nó là dữ liệu không tin cậy. Đi theo một liên kết ở đây là
+    # đọc một tệp nằm ngoài thư mục được trỏ tới -- và tên khoá trong đó lại đi
+    # thẳng ra stderr. Ignore file đã chặn đúng chuyện này từ trước
+    # (discovery._load_ignore_files); chỗ này thì chưa.
+    if safe_paths.is_link_like(source):
+        return config, (
+            "%s là một liên kết nên đã bị bỏ qua; lượt quét dùng cấu hình mặc định"
+            % safe_text.display_path(str(source)),
+            "liên kết ở vị trí này trỏ được ra ngoài cây quét, nên công cụ không đọc nó",
+        )
+    # Một tệp cấu hình hỏng hoặc độc hại trong cây bị quét cũng phải chết theo
+    # kiểu giống nhau: báo rõ ra rồi quét tiếp với cấu hình mặc định. Cho nó
+    # chết cả lượt quét thì một repo lạ đủ làm công cụ vô dụng -- người dùng
+    # mất toàn bộ báo cáo chỉ vì một tệp mình không hề viết.
+    try:
+        data = load_config_file(source)
+        return build_config(data, config), _project_config_notices(source, data)
+    except ConfigError as exc:
+        return config, (
+            "%s không đọc được nên đã bị bỏ qua; lượt quét dùng cấu hình mặc định"
+            % safe_text.display_path(str(source)),
+            str(exc),
+        )
+
+
+def _resolve_config(args: argparse.Namespace) -> Tuple[Config, Tuple[str, ...]]:
+    config, notices = _config_from_file(args)
 
     known = {rule.id for rule in all_rules()}
     disabled = tuple(item.strip().upper() for item in args.disable)
@@ -325,11 +473,64 @@ def _resolve_config(args: argparse.Namespace) -> Config:
         overrides["follow_symlinks"] = True
     if args.no_inline_suppressions:
         overrides["honor_inline_suppressions"] = False
+    if args.no_ignore_files:
+        overrides["respect_ignore_files"] = False
     if args.no_vcs_ignore:
         overrides["respect_vcs_ignore"] = False
     if args.include_env_sources:
         overrides["include_low_signal_sources"] = True
-    return config.with_overrides(**overrides)
+    if args.no_cross_file:
+        overrides["cross_file_analysis"] = False
+    if args.no_context_demotion:
+        overrides["context_awareness"] = False
+    if args.diff:
+        overrides["changed_lines"] = _load_patch(args.diff)
+    return config.with_overrides(**overrides), notices
+
+
+def _load_patch(source: str) -> diffscope.ChangedLines:
+    """Đọc unified diff từ tệp hoặc stdin.
+
+    Patch là dữ liệu KHÔNG TIN CẬY như mọi thứ khác trong cây được quét: nó
+    thường do CI sinh ra từ nhánh của người gửi pull request. Nên nó đi qua
+    đúng lối vào có hạn mức của diffscope, và một patch hỏng làm hỏng lượt
+    chạy ngay tại đây -- chứ không âm thầm biến thành "không lọc gì cả", vì
+    đó là kiểu hỏng khiến cổng CI mở toang mà không ai biết.
+    """
+    if source == "-":
+        text = sys.stdin.read(diffscope.MAX_PATCH_BYTES + 1)
+    else:
+        path = safe_paths.validate_input_path(
+            source, "tệp patch", diffscope.MAX_PATCH_BYTES
+        )
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise ConfigError("không đọc được tệp patch: %s" % source) from exc
+    try:
+        return diffscope.parse_patch(text)
+    except diffscope.DiffError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _project_config_notices(source: Path, data: Dict[str, Any]) -> Tuple[str, ...]:
+    """Cấu hình tự tìm thấy trong cây bị quét có thể làm báo cáo sạch đi.
+
+    Khi quét mã của người khác thì tệp này do họ viết, nên nó phải hiện ra --
+    "sạch" mà không nói vì sao sạch chính là thứ tạo ra false confidence.
+    """
+    reductions = coverage_reductions(data)
+    if not reductions:
+        return ()
+    # Giữ chuỗi ở dạng thuần, không nhúng sẵn dấu đầu dòng: chúng còn đi vào
+    # JSON, SARIF và Markdown, nơi mỗi định dạng tự lo cách trình bày.
+    lines = [
+        "%s trong cây được quét đã thu hẹp phạm vi quét:"
+        % safe_text.display_path(str(source))
+    ]
+    lines.extend(reductions)
+    lines.append("chạy lại với --no-config nếu không tin tệp cấu hình này")
+    return tuple(lines)
 
 
 if __name__ == "__main__":

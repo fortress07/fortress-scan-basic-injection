@@ -20,8 +20,39 @@ class RuleSpec:
     references: Tuple[str, ...] = ()
 
 
-_OWASP_INJECTION = ("A03:2021-Injection",)
-_OWASP_INTEGRITY = ("A08:2021-Software and Data Integrity Failures",)
+# OWASP Top 10:2025 là mốc chính, nhãn 2021 đi kèm phía sau.
+#
+# Giữ cả hai vì hai lý do thực tế. Nhiều nơi ( báo cáo tuân thủ, bảng điều
+# khiển code scanning, mẫu phiếu kiểm thử ) vẫn đang tính theo 2021, và mã rule
+# cùng khoá JSON của bản 0.1.0 là giao diện ổn định nên chỉ được THÊM vào chứ
+# không được thay bằng thứ người dùng cũ không tra ra.
+#
+# Bản 2025 gộp lại vài chỗ đáng chú ý với đúng những gì công cụ này quét:
+# SSRF thôi đứng riêng và về chung với Broken Access Control; chuỗi cung ứng
+# tách thành một mục riêng ( A03 ) thay vì nấp trong A08; còn XXE vẫn nằm
+# trong Security Misconfiguration như từ 2021.
+_OWASP_INJECTION = ("A05:2025-Injection", "A03:2021-Injection")
+_OWASP_INTEGRITY = (
+    "A08:2025-Software or Data Integrity Failures",
+    "A08:2021-Software and Data Integrity Failures",
+)
+# Chuỗi cung ứng phần mềm được nâng thành một mục riêng trong bản 2025.
+_OWASP_SUPPLY_CHAIN = (
+    "A03:2025-Software Supply Chain Failures",
+    "A08:2021-Software and Data Integrity Failures",
+)
+# Đi ra ngoài phạm vi tài nguyên được phép: path traversal và open redirect.
+_OWASP_ACCESS = ("A01:2025-Broken Access Control", "A01:2021-Broken Access Control")
+# SSRF không còn là mục riêng của bản 2025; nó về chung với kiểm soát truy cập.
+_OWASP_SSRF = (
+    "A01:2025-Broken Access Control",
+    "A10:2021-Server-Side Request Forgery",
+)
+# XXE nằm trong Security Misconfiguration, giống cách bản 2021 xếp nó.
+_OWASP_MISCONFIGURATION = (
+    "A02:2025-Security Misconfiguration",
+    "A05:2021-Security Misconfiguration",
+)
 
 _RULE_LIST: Tuple[RuleSpec, ...] = (
     RuleSpec(
@@ -316,7 +347,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.CRITICAL,
         confidence=Confidence.HIGH,
         cwe=("CWE-829", "CWE-98"),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_INJECTION,
         description=(
             "Dữ liệu kẻ tấn công điều khiển được chọn module, tệp hay đường dẫn sẽ được nạp và "
             "thực thi. Nạp một module là chạy mã ở mức cao nhất của module đó, nên điều khiển được "
@@ -406,7 +437,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.HIGH,
         confidence=Confidence.MEDIUM,
         cwe=("CWE-611",),
-        owasp=_OWASP_INJECTION,
+        owasp=_OWASP_MISCONFIGURATION,
         description=(
             "Bộ phân tích XML được cấu hình cho phép phân giải thực thể ngoài hoặc nạp DTD. Một "
             "tài liệu được chế tác có thể đọc tệp cục bộ, gọi tới dịch vụ nội bộ trong mạng, hoặc "
@@ -475,13 +506,37 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         ),
     ),
     RuleSpec(
+        id="FSB-UNI-004",
+        title="Ký tự điều khiển khiến các công cụ chia dòng khác nhau",
+        category=Category.UNICODE,
+        severity=Severity.MEDIUM,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-436", "CWE-94"),
+        owasp=_OWASP_INTEGRITY,
+        description=(
+            "Tệp chứa ký tự điều khiển C0/C1 hoặc dấu tách dòng Unicode. Mỗi công cụ hiểu "
+            "chúng một kiểu: str.splitlines() của Python, nhiều trình soạn thảo và giao diện "
+            "review coi \\v, \\f, \\x1c-\\x1e, NEL, U+2028, U+2029 là xuống dòng, còn trình "
+            "biên dịch thì không. Hệ quả là số dòng mà người review nhìn thấy lệch khỏi số "
+            "dòng thực sự chạy, nên một dòng vô hại có thể bị trưng ra thay cho dòng nguy "
+            "hiểm. Ký tự ESC còn mang được chuỗi điều khiển terminal để viết đè nội dung in "
+            "ra console."
+        ),
+        remediation=(
+            "Gỡ bỏ các ký tự này khỏi mã nguồn. Nếu cần chúng trong dữ liệu, hãy viết dạng "
+            "escape (\"\\\\x0c\") thay vì nhúng byte thô, và thêm một bước kiểm tra trong CI "
+            "để chặn ký tự điều khiển lọt vào tệp mã nguồn."
+        ),
+        references=("https://cwe.mitre.org/data/definitions/436.html",),
+    ),
+    RuleSpec(
         id="FSB-SUP-001",
         title="Script vòng đời của package tải mã từ xa về chạy",
         category=Category.SUPPLY_CHAIN,
         severity=Severity.CRITICAL,
         confidence=Confidence.HIGH,
         cwe=("CWE-506", "CWE-829"),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_SUPPLY_CHAIN,
         description=(
             "Một script chạy lúc cài đặt hoặc build tải nội dung về rồi đẩy thẳng vào trình thông "
             "dịch. Ai kiểm soát được endpoint đó, hoặc chặn được kết nối, sẽ chạy mã trên mọi máy "
@@ -499,7 +554,7 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         severity=Severity.LOW,
         confidence=Confidence.LOW,
         cwe=("CWE-829",),
-        owasp=_OWASP_INTEGRITY,
+        owasp=_OWASP_SUPPLY_CHAIN,
         description=(
             "Một script chạy lúc cài đặt có gọi lệnh shell. Chuyện này phổ biến và thường hợp lệ, "
             "nhưng đây đúng là cơ chế mà các payload dependency confusion lợi dụng, nên câu lệnh "
@@ -508,6 +563,169 @@ _RULE_LIST: Tuple[RuleSpec, ...] = (
         remediation=(
             "Giữ script cài đặt tối giản, và dùng --ignore-scripts trên CI ở những nơi quá trình "
             "build không cần tới chúng."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-PATH-001",
+        title="Dữ liệu không tin cậy quyết định đường dẫn tệp được mở",
+        category=Category.PATH,
+        severity=Severity.HIGH,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-22", "CWE-73"),
+        owasp=_OWASP_ACCESS,
+        description=(
+            "Một đường dẫn có nguồn gốc từ bên ngoài, kẻ tấn công điều khiển được, đi thẳng vào "
+            "việc mở hoặc gửi tệp. Ký tự ../ ( hoặc ..\\ trên Windows ) trong giá trị đó đọc được "
+            "tệp nằm ngoài thư mục dự định, kể cả tệp cấu hình và bí mật."
+        ),
+        remediation=(
+            "Rút gọn về tên tệp bằng os.path.basename() hoặc secure_filename rồi mới ghép vào "
+            "thư mục gốc, hoặc kiểm tra os.path.realpath() nằm trong thư mục gốc trước khi mở."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-SSRF-001",
+        title="Dữ liệu không tin cậy quyết định URL ứng dụng tự gửi request tới",
+        category=Category.SSRF,
+        severity=Severity.HIGH,
+        confidence=Confidence.MEDIUM,
+        cwe=("CWE-918",),
+        owasp=_OWASP_SSRF,
+        description=(
+            "Một URL hoặc tên máy có nguồn gốc từ bên ngoài quyết định nơi ứng dụng tự gửi "
+            "request. Kẻ tấn công dùng điều đó đọc dịch vụ nội bộ ( metadata cloud, admin panel ) "
+            "từ phía máy chủ, quét mạng trong, hoặc biến máy chủ thành proxy hộ họ."
+        ),
+        remediation=(
+            "Cho phép danh sách máy cố định thay vì nhận URL thô; nếu phải nhận URL thì phân tích "
+            "bằng urlparse() và kiểm tra hostname trước, và chặn scheme khác http/https."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-REDIR-001",
+        title="Dữ liệu không tin cậy quyết định nơi chuyển hướng người dùng tới",
+        category=Category.REDIRECT,
+        severity=Severity.MEDIUM,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-601",),
+        owasp=_OWASP_ACCESS,
+        description=(
+            "Một URL chuyển hướng có nguồn gốc từ bên ngoài đi thẳng vào lệnh redirect. Kẻ tấn "
+            "công gửi link mang địa chỉ thật của anh em nhưng nhảy sang trang giả mạo, tận dụng "
+            "niềm tin của người dùng vào tên miền của anh em."
+        ),
+        remediation=(
+            "Chỉ chấp nhận đường dẫn tương đối, hoặc đối chiếu hostname với một danh sách cho "
+            "phép trước khi chuyển hướng. Đừng truyền thẳng URL nhận được."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-HDR-001",
+        title="Dữ liệu không tin cậy chảy vào header HTTP của phản hồi",
+        category=Category.HTTP_HEADER,
+        severity=Severity.HIGH,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-113", "CWE-117"),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "Một giá trị có nguồn gốc từ bên ngoài đi thẳng vào header HTTP của phản hồi. Nếu nó "
+            "chứa CR/LF thì chèn được header tùy ý và tách thân phản hồi -- đặt lại Set-Cookie, "
+            "Content-Length sai lệch, hay thậm chí thay cả nội dung trang."
+        ),
+        remediation=(
+            "Từ chối giá trị chứa ký tự điều khiển bằng re.fullmatch() với bảng chữ cái cho phép "
+            "trước khi đặt vào header, hoặc encode giá trị theo RFC 5987."
+        ),
+    ),
+    RuleSpec(
+        id="FSB-CI-001",
+        title="Dữ liệu không tin cậy được dán thẳng vào khối run: của workflow CI",
+        category=Category.COMMAND,
+        severity=Severity.CRITICAL,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-78", "CWE-94"),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "Một biểu thức ${{ ... }} lấy giá trị do người ngoài đặt được -- tiêu đề issue, thân "
+            "comment, tên nhánh của pull request -- và GitHub thay nó vào script TRƯỚC khi shell "
+            "đọc dòng lệnh. Dấu nháy trong workflow không cứu được: kẻ tấn công đóng nháy rồi viết "
+            "tiếp lệnh của mình. Lệnh đó chạy trên runner đang giữ GITHUB_TOKEN và mọi secret của "
+            "job."
+        ),
+        remediation=(
+            "Đưa giá trị qua biến môi trường rồi mới dùng trong shell: khai báo `env: TIEU_DE: "
+            "${{ github.event.issue.title }}` ở bước đó, và trong run: dùng \"$TIEU_DE\". Lúc này "
+            "chuỗi đi vào tiến trình qua môi trường chứ không qua văn bản script, nên không còn "
+            "ranh giới cú pháp nào để phá."
+        ),
+        references=(
+            "https://securitylab.github.com/resources/github-actions-untrusted-input/",
+            "https://docs.github.com/en/actions/security-for-github-actions/security-guides/"
+            "security-hardening-for-github-actions",
+        ),
+    ),
+    RuleSpec(
+        id="FSB-CI-002",
+        title="Dữ liệu không tin cậy được dán vào script inline của một action",
+        category=Category.CODE_EXECUTION,
+        severity=Severity.CRITICAL,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-94",),
+        owasp=_OWASP_INJECTION,
+        description=(
+            "actions/github-script và các action tương tự nhận một đoạn JavaScript rồi eval nó. "
+            "Biểu thức ${{ ... }} được thay vào đoạn mã đó trước khi nó chạy, nên dữ liệu do người "
+            "ngoài đặt trở thành mã chạy với quyền của token trong job."
+        ),
+        remediation=(
+            "Đọc giá trị qua context của chính action ( `context.payload...` ) hoặc qua "
+            "`process.env` sau khi đã gán bằng khối env:, đừng nội suy ${{ ... }} vào thân script."
+        ),
+        references=("https://github.com/actions/github-script#readme",),
+    ),
+    RuleSpec(
+        id="FSB-CI-003",
+        title="Workflow đặc quyền checkout mã của pull request rồi chạy nó",
+        category=Category.SUPPLY_CHAIN,
+        severity=Severity.HIGH,
+        confidence=Confidence.MEDIUM,
+        cwe=("CWE-829", "CWE-94"),
+        owasp=_OWASP_SUPPLY_CHAIN,
+        description=(
+            "pull_request_target và workflow_run chạy với token ghi được và đọc được secret của "
+            "kho, khác hẳn pull_request thường. Checkout đúng mã của pull request trong một "
+            "workflow như vậy rồi build hay test nó nghĩa là chạy mã của người lạ ở phía trong "
+            "hàng rào -- một script cài đặt hay một bước build là đủ để lấy secret."
+        ),
+        remediation=(
+            "Tách làm hai: workflow pull_request_target chỉ làm việc không cần mã ( gắn nhãn, "
+            "bình luận ), còn việc build/test mã đóng góp thì để workflow pull_request thường lo. "
+            "Nếu buộc phải checkout thì đừng chạy gì từ cây mã đó và đừng đưa secret vào job."
+        ),
+        references=(
+            "https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/",
+        ),
+    ),
+    RuleSpec(
+        id="FSB-CI-004",
+        title="Action của bên thứ ba được tham chiếu bằng nhãn có thể đổi",
+        category=Category.SUPPLY_CHAIN,
+        severity=Severity.MEDIUM,
+        confidence=Confidence.HIGH,
+        cwe=("CWE-829", "CWE-494"),
+        owasp=_OWASP_SUPPLY_CHAIN,
+        description=(
+            "`uses: chu-so-huu/action@v3` bám vào một tag hoặc một nhánh, mà cả hai đều do bên kia "
+            "di chuyển được bất cứ lúc nào. Ai chiếm được kho đó -- hoặc chính chủ sở hữu đổi ý -- "
+            "sẽ chạy mã mới trên runner của bạn mà không cần bạn sửa một dòng nào."
+        ),
+        remediation=(
+            "Ghim theo digest commit đầy đủ: `uses: chu-so-huu/action@<sha 40 ký tự>  # v3.1.0`. "
+            "Dependabot vẫn nâng cấp được bản ghim này, còn nội dung thì không đổi sau lưng."
+        ),
+        references=(
+            "https://docs.github.com/en/actions/security-for-github-actions/security-guides/"
+            "security-hardening-for-github-actions#using-third-party-actions",
         ),
     ),
 )

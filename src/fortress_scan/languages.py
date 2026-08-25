@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Dict, Optional, Tuple
 
 PYTHON = "python"
@@ -12,7 +12,16 @@ RUBY = "ruby"
 GO = "go"
 CSHARP = "csharp"
 SHELL = "shell"
+RUST = "rust"
+POWERSHELL = "powershell"
+PERL = "perl"
+LUA = "lua"
 MANIFEST = "manifest"
+# Workflow CI là mã thật: nó chạy trên máy có token đẩy được lên registry và
+# ký được release, và `run:` của nó là một shell script mà GitHub dán chuỗi
+# vào TRƯỚC khi shell nhìn thấy. Đó là một ngôn ngữ riêng chứ không phải YAML
+# vô hại, nên nó có bộ phân tích riêng.
+WORKFLOW = "workflow"
 
 _EXTENSION_MAP: Dict[str, str] = {
     ".py": PYTHON,
@@ -54,6 +63,15 @@ _EXTENSION_MAP: Dict[str, str] = {
     ".bash": SHELL,
     ".zsh": SHELL,
     ".ksh": SHELL,
+    ".rs": RUST,
+    ".ps1": POWERSHELL,
+    ".psm1": POWERSHELL,
+    ".psd1": POWERSHELL,
+    ".pl": PERL,
+    ".pm": PERL,
+    ".t": PERL,
+    ".cgi": PERL,
+    ".lua": LUA,
 }
 
 _FILENAME_MAP: Dict[str, str] = {
@@ -72,10 +90,44 @@ _SHEBANG_MAP: Tuple[Tuple[str, str], ...] = (
     ("ruby", RUBY),
     ("bash", SHELL),
     ("zsh", SHELL),
+    ("perl", PERL),
+    ("lua", LUA),
+    ("pwsh", POWERSHELL),
     ("sh", SHELL),
 )
 
 _MAX_FILENAME_LENGTH = 255
+
+# Thư mục chứa định nghĩa workflow của các nền tảng CI dùng cú pháp GitHub
+# Actions. Gitea và Forgejo chạy lại đúng bộ chạy đó, kể cả biểu thức
+# ${{ ... }}, nên chúng chia sẻ cùng một loạt lỗ hổng.
+_WORKFLOW_DIRECTORIES: Tuple[Tuple[str, str], ...] = (
+    (".github", "workflows"),
+    (".gitea", "workflows"),
+    (".forgejo", "workflows"),
+)
+
+_WORKFLOW_SUFFIXES: Tuple[str, ...] = (".yml", ".yaml")
+
+
+def language_from_relative(relative_path: str) -> Optional[str]:
+    """Ngôn ngữ suy từ VỊ TRÍ chứ không phải từ phần mở rộng.
+
+    `.yml` nói chung không phải mã, nhưng `.github/workflows/build.yml` thì có:
+    nó là một script chạy trên máy giữ token đẩy release. Phân biệt được hai
+    thứ đó chỉ có đường dẫn, nên phép nhận dạng này phải nhận cả đường dẫn --
+    trả None nghĩa là "không biết", và người gọi rơi về nhận dạng theo tên.
+    """
+    parts = [part for part in relative_path.replace("\\", "/").split("/") if part]
+    if len(parts) < 3:
+        return None
+    if not parts[-1].lower().endswith(_WORKFLOW_SUFFIXES):
+        return None
+    for index in range(len(parts) - 2):
+        pair = (parts[index].lower(), parts[index + 1].lower())
+        if pair in _WORKFLOW_DIRECTORIES:
+            return WORKFLOW
+    return None
 
 
 def is_scannable_name(name: str) -> bool:
@@ -84,12 +136,32 @@ def is_scannable_name(name: str) -> bool:
     return not name.startswith(".") or name in _FILENAME_MAP
 
 
-def detect_language(path: Path) -> Optional[str]:
-    name = path.name
+def language_from_name(name: str) -> Optional[str]:
+    """Ngôn ngữ suy được CHỈ từ tên, không chạm vào đĩa.
+
+    Dùng để đếm những tệp bị tệp ignore loại bỏ: ở đó ta cần biết "đây có phải
+    mã nguồn không" mà không được mở tệp -- mở ra thì hoá ra vẫn đọc đúng thứ
+    vừa tuyên bố là bỏ qua. Đổi lại, script không có phần mở rộng (nhận diện
+    bằng shebang) không được tính, nên số đếm là cận dưới.
+    """
     mapped = _FILENAME_MAP.get(name)
     if mapped is not None:
         return mapped
-    suffix = path.suffix.lower()
+    return _EXTENSION_MAP.get(PurePath(name).suffix.lower())
+
+
+def detect_language(path: Path, name: Optional[str] = None) -> Optional[str]:
+    """`name` tách tên hiển thị khỏi tệp thật trên đĩa.
+
+    Khi đi theo một liên kết, cái tên nằm trong cây được quét là tên của
+    liên kết, còn nội dung nằm ở đích -- nên ngôn ngữ đoán theo tên liên kết
+    nhưng shebang phải đọc từ đích.
+    """
+    label = name or path.name
+    mapped = _FILENAME_MAP.get(label)
+    if mapped is not None:
+        return mapped
+    suffix = PurePath(label).suffix.lower()
     mapped = _EXTENSION_MAP.get(suffix)
     if mapped is not None:
         return mapped
@@ -127,5 +199,10 @@ def display_name(language: str) -> str:
         GO: "Go",
         CSHARP: "C#",
         SHELL: "Shell",
+        RUST: "Rust",
+        POWERSHELL: "PowerShell",
+        PERL: "Perl",
+        LUA: "Lua",
         MANIFEST: "Package manifest",
+        WORKFLOW: "CI workflow",
     }.get(language, language)

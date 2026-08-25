@@ -4,6 +4,7 @@ from .core.model import (
     Category,
     Confidence,
     Finding,
+    PathContext,
     ScanError,
     ScanResult,
     ScanStats,
@@ -18,6 +19,7 @@ __license__ = "MIT"
 
 __all__ = [
     "Category",
+    "PathContext",
     "Confidence",
     "Finding",
     "ScanError",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat as stat_module
 from pathlib import Path
 from typing import Optional
 
@@ -61,8 +62,6 @@ def is_regular_file(path: Path) -> bool:
         status = os.stat(path, follow_symlinks=False)
     except OSError:
         return False
-    import stat as stat_module
-
     return stat_module.S_ISREG(status.st_mode)
 
 
@@ -71,6 +70,44 @@ def relative_display(root: Path, path: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.name
+
+
+def validate_input_path(candidate: str, label: str, max_bytes: int) -> Path:
+    """Phân giải và kiểm một tệp ĐẦU VÀO do người dùng chỉ định trên dòng lệnh.
+
+    Ba cờ nhận đường dẫn đọc vào -- ``--config``, ``--baseline``, ``--diff`` --
+    xưa nay mỗi cờ tự kiểm theo một kiểu, và một trong ba cái kiểm thiếu. Gộp
+    về một chỗ để không còn chỗ nào kiểm thiếu nữa.
+
+    Phép kiểm quan trọng nhất ở đây là "phải là TỆP THƯỜNG", và nó không phải
+    hình thức. ``--baseline /dev/zero`` trước đây đi lọt: ``stat()`` báo kích
+    thước 0 nên qua được hạn mức, rồi ``read_text()`` đọc mãi không hết và ăn
+    hết bộ nhớ. Một FIFO còn tệ hơn -- lượt quét đứng im vô hạn, không lỗi,
+    không dấu vết. Cả hai đều nằm trên đường đi mà một script CI viết sai, hay
+    một tác nhân tự động đoán sai tên tệp, chạm tới rất dễ.
+
+    Đường dẫn được phân giải TRƯỚC khi chạm vào hệ thống tệp để đọc, nên
+    ``..`` và liên kết được quy về đích thật rồi mới đem đi kiểm -- kiểm trên
+    tên chưa phân giải là kiểm một thứ khác với thứ sẽ được mở.
+    """
+    path = Path(candidate).expanduser()
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise PathConfinementError("không tìm thấy %s: %s" % (label, candidate)) from exc
+    try:
+        status = os.stat(resolved)
+    except OSError as exc:
+        raise PathConfinementError("không đọc được %s: %s" % (label, candidate)) from exc
+    if not stat_module.S_ISREG(status.st_mode):
+        raise PathConfinementError(
+            "%s phải là một tệp thường: %s" % (label, candidate)
+        )
+    if status.st_size > max_bytes:
+        raise PathConfinementError(
+            "%s lớn bất thường (giới hạn %d byte): %s" % (label, max_bytes, candidate)
+        )
+    return resolved
 
 
 def validate_output_path(candidate: str) -> Path:

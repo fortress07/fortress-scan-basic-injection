@@ -302,6 +302,34 @@ def handler():
     assert "FSB-CMD-001" in rule_ids(source)
 
 
+def test_socket_recv_through_variable_is_a_source():
+    """Code thật gọi recv() qua biến giữ kết nối, không phải qua socket.socket.
+
+    Từ xưa công cụ chỉ khớp đúng tên lớp đầy đủ nên mẫu thật sự phổ biến này
+    bị bỏ sót toàn bộ (README từng phải ghi rõ điều đó). Giờ mọi lời gọi
+    recv/recvfrom/recv_into đều là nguồn medium.
+    """
+    source = """
+import socket
+import os
+
+def xu_ly(conn):
+    du_lieu = conn.recv(4096)
+    os.system("echo " + du_lieu.decode("utf-8"))
+"""
+    assert "FSB-CMD-001" in rule_ids(source)
+
+
+def test_socket_recvfrom_and_recv_into_are_sources():
+    source = """
+def xu_ly(conn):
+    du_lieu, _ = conn.recvfrom(4096)
+    import os
+    os.system("echo " + str(du_lieu))
+"""
+    assert "FSB-CMD-001" in rule_ids(source)
+
+
 def test_inline_suppression_is_honored():
     source = """
 import os
@@ -336,7 +364,6 @@ def test_syntax_error_is_reported_as_unparsable():
         relative_path="broken.py",
         language=PYTHON,
         source=source,
-        lines=tuple(source.splitlines()),
         config=Config(),
     )
     with pytest.raises(UnparsableSource):

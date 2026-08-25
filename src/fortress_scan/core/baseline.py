@@ -7,7 +7,7 @@ from typing import List, Sequence, Set, Tuple
 from .model import Finding
 
 BASELINE_VERSION = 1
-_MAX_BASELINE_BYTES = 16 * 1024 * 1024
+MAX_BASELINE_BYTES = 16 * 1024 * 1024
 
 
 class BaselineError(Exception):
@@ -19,7 +19,7 @@ def load(path: Path) -> Set[str]:
         size = path.stat().st_size
     except OSError as exc:
         raise BaselineError("không đọc được tệp baseline %s" % path) from exc
-    if size > _MAX_BASELINE_BYTES:
+    if size > MAX_BASELINE_BYTES:
         raise BaselineError("tệp baseline lớn bất thường: %s" % path)
     try:
         document = json.loads(path.read_text(encoding="utf-8"))

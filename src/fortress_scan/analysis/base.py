@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..core.budget import Budget
@@ -8,7 +8,7 @@ from ..core.config import Config
 from ..core.model import Confidence, Finding, Severity, StepKind, TraceStep
 from ..core.registry import get_rule
 from ..security.redaction import redact
-from ..security.text import make_snippet
+from ..security.text import make_snippet, normalize_newlines, split_lines
 
 
 @dataclass(frozen=True)
@@ -16,9 +16,23 @@ class AnalysisUnit:
     relative_path: str
     language: str
     source: str
-    lines: Tuple[str, ...]
     config: Config
     degraded_encoding: bool = False
+    lines: Tuple[str, ...] = field(init=False, default=())
+
+    def __post_init__(self) -> None:
+        """Chuẩn hoá source về LF và suy ra lines từ chính nó.
+
+        lines không nhận từ ngoài vào (init=False): mọi bộ phân tích đều đếm
+        dòng theo "\\n" -- ast.parse, Tokenizer._line, find_code_points -- nên
+        nếu để caller tự cắt dòng thì chỉ cần một chỗ dùng str.splitlines() là
+        mảng dòng lệch khỏi số dòng rule engine báo, và snippet đính kèm
+        finding sẽ trỏ sang đoạn mã khác. Buộc suy ra ở đây khiến trạng thái
+        lệch đó không diễn đạt được nữa.
+        """
+        normalized = normalize_newlines(self.source)
+        object.__setattr__(self, "source", normalized)
+        object.__setattr__(self, "lines", split_lines(normalized))
 
 
 class FindingBuilder:
@@ -38,6 +52,7 @@ class FindingBuilder:
         column: int,
         label: str,
         code: str = "",
+        path: str = "",
     ) -> TraceStep:
         return TraceStep(
             kind=kind,
@@ -45,6 +60,7 @@ class FindingBuilder:
             column=column,
             label=make_snippet(label, 160),
             code=make_snippet(redact(code), 160) if code else self.snippet_for(line),
+            path=path,
         )
 
     def add(
@@ -60,6 +76,7 @@ class FindingBuilder:
         confidence: Optional[Confidence] = None,
         trace: Sequence[TraceStep] = (),
         tags: Sequence[str] = (),
+        evidence: Sequence[str] = (),
     ) -> None:
         if not self._unit.config.rule_enabled(rule_id):
             return
@@ -94,6 +111,7 @@ class FindingBuilder:
             references=rule.references,
             trace=tuple(trace),
             tags=tuple(tags),
+            evidence=tuple(evidence),
         )
         existing = self._findings.get(key)
         if existing is None or finding.sort_key < existing.sort_key:

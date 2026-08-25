@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
+from fortress_scan import cli
 from fortress_scan.core import baseline
+from fortress_scan.core import discovery as discovery_module
 from fortress_scan.core.budget import Budget, BudgetExceeded
 from fortress_scan.core.config import Config, ConfigError, build_config
+from fortress_scan.core.discovery import Discovery, FileChangedDuringScan, read_source
 from fortress_scan.core.engine import scan, scan_source
 from fortress_scan.core.ignore import IgnoreSet
+from fortress_scan.core.model import ScanNotice
+from fortress_scan.report import ConsoleReporter, to_json, to_markdown, to_sarif
 from fortress_scan.languages import PYTHON
 from fortress_scan.security import paths as safe_paths
 from fortress_scan.security import runtime as sandbox
@@ -82,6 +88,54 @@ def test_sandbox_blocks_network_and_process_execution():
         sandbox.release()
     assert not sandbox.is_engaged()
     assert socket.socket is not None
+
+
+def test_sandbox_blocks_every_process_primitive_on_this_platform():
+    """Họ exec*/spawn*/posix_spawn* phải chặn hết mọi biến thể tồn tại trên
+    nền tảng hiện tại, không chỉ vài cái phổ biến."""
+    import subprocess
+
+    sandbox.engage()
+    blocked = []
+    try:
+        for name in (
+            "system",
+            "popen",
+            "execv",
+            "execve",
+            "execvp",
+            "execvpe",
+            "execl",
+            "execle",
+            "execlp",
+            "spawnv",
+            "spawnve",
+            "spawnvp",
+            "spawnvpe",
+            "spawnl",
+            "spawnle",
+            "spawnlp",
+            "spawnlpe",
+            "posix_spawn",
+            "posix_spawnp",
+            "fork",
+            "forkpty",
+            "startfile",
+        ):
+            original = getattr(os, name, None)
+            if original is None:
+                continue
+            blocked.append(name)
+            with pytest.raises(sandbox.SandboxViolation):
+                getattr(os, name)()
+        if hasattr(subprocess, "Popen"):
+            blocked.append("Popen")
+            with pytest.raises(sandbox.SandboxViolation):
+                subprocess.Popen()
+    finally:
+        sandbox.release()
+    # Trên mỗi nền tảng đều phải chặn được ít nhất một primitive thật.
+    assert blocked
 
 
 def test_budget_stops_runaway_analysis():
@@ -184,9 +238,29 @@ def test_scan_skips_oversized_files(tmp_path: Path):
 
 def test_scan_skips_binary_files(tmp_path: Path):
     binary = tmp_path / "blob.py"
-    binary.write_bytes(b"import os\x00\x01\x02os.system('ls')")
+    binary.write_bytes(b"import os" + bytes(64) + b"os.system('ls')")
     result = scan(str(tmp_path), Config())
     assert result.stats.files_analyzed == 0
+    # Bỏ qua thì được, nhưng phải nói ra: im lặng thì người đọc báo cáo tưởng
+    # tệp đó đã được soi và sạch.
+    assert any(error.reason == "binary-skipped" for error in result.errors)
+
+
+def test_a_stray_null_byte_does_not_hide_a_file(tmp_path: Path):
+    """Một byte NUL lẻ không biến tệp thành nhị phân.
+
+    Node và PHP vẫn chạy tệp có NUL trong chuỗi, nên nếu chỉ một byte đó đủ
+    làm tệp biến mất khỏi lần quét thì đó là một đường né hoàn chỉnh.
+    """
+    payload = tmp_path / "app.js"
+    payload.write_bytes(
+        b"const cp = require('child_process');\n"
+        b"const pad = '\x00';\n"
+        b"function h(req){ const host = req.query.host; cp.exec('ping ' + host); }\n"
+    )
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 1
+    assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
 
 
 def test_symlink_outside_root_is_not_followed(tmp_path: Path):
@@ -203,6 +277,123 @@ def test_symlink_outside_root_is_not_followed(tmp_path: Path):
     assert result.stats.files_analyzed == 0
     result_following = scan(str(root), Config(follow_symlinks=True))
     assert result_following.stats.files_analyzed == 0
+    # Con số 0 ở trên phải đến từ việc chặn liên kết thoát ra ngoài, chứ không
+    # phải từ việc bỏ sạch mọi liên kết. Không có khẳng định này thì một lỗi
+    # khiến --follow-symlinks không làm gì cả cũng làm test xanh.
+    assert any(error.reason == "link-escapes-root" for error in result_following.errors)
+
+
+def test_scan_is_complete_when_the_filesystem_reports_no_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Hệ thống tệp không cho biết inode thì vẫn phải quét đủ.
+
+    Share mạng, FAT và một số kiểu mount trong container trả về 0 cho
+    st_dev/st_ino. Nếu coi 0 là một danh tính hợp lệ thì mọi entry trùng
+    nhau, lượt quét dừng ngay sau thư mục đầu tiên và không in ra dòng lỗi
+    nào -- một báo cáo "sạch" hoàn toàn rỗng ruột.
+    """
+    for name in ("p", "q", "r", "s"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "vuln.py").write_text(
+            "import os\nos.system(input())\n", encoding="utf-8"
+        )
+
+    assert scan(str(tmp_path), Config()).stats.files_analyzed == 4
+
+    real_stat = os.stat
+
+    def stat_without_identity(path, *args, **kwargs):
+        # Chỉ bỏ inode, giữ nguyên st_dev -- đây mới là hình dạng nguy hiểm.
+        # Khi cả hai cùng bằng 0 thì mã cũ đã nhận ra và bỏ qua việc gộp; khi
+        # riêng inode bằng 0 thì mọi entry mang chung khoá (st_dev, 0).
+        status = real_stat(path, *args, **kwargs)
+        return os.stat_result((status.st_mode, 0, status.st_dev) + tuple(status)[3:])
+
+    monkeypatch.setattr(discovery_module.os, "stat", stat_without_identity)
+    monkeypatch.setattr(Path, "stat", lambda self, **kw: stat_without_identity(self))
+
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 4
+    assert len(result.findings) == 4
+
+
+def test_entry_is_directory_asks_the_target_not_the_link(tmp_path: Path):
+    """Ghim hợp đồng mà `--follow-symlinks` từng vi phạm.
+
+    `is_dir(follow_symlinks=False)` soi lstat của chính liên kết nên LUÔN trả
+    False, kể cả khi liên kết trỏ tới thư mục. Quyết định phải hỏi đích đã
+    phân giải; nếu hỏi chính liên kết thì cả cây con phía sau nó biến mất
+    khỏi lượt quét mà không để lại dấu vết nào.
+
+    Tạo symlink thật cần đặc quyền trên Windows, và junction thì KHÔNG tái
+    hiện được lỗi này (junction trả về True nên đi đúng nhánh kể cả khi code
+    sai), nên hợp đồng được ghim thẳng ở đây để chạy được trên mọi nền tảng.
+    """
+    real_directory = tmp_path / "realdir"
+    real_directory.mkdir()
+    real_file = tmp_path / "real.py"
+    real_file.write_text("value = 1\n", encoding="utf-8")
+
+    class LinkEntry:
+        def is_dir(self, follow_symlinks: bool = True) -> bool:
+            return False
+
+    discovery = Discovery(tmp_path, Config(follow_symlinks=True))
+    link = tmp_path / "link"
+
+    assert discovery._entry_is_directory(LinkEntry(), link, real_directory) is True
+    assert discovery._entry_is_directory(LinkEntry(), link, real_file) is False
+
+
+def test_link_to_file_inside_root_is_followed_when_enabled(tmp_path: Path):
+    (tmp_path / "real.py").write_text(
+        "import os\nos.system(input())\n", encoding="utf-8"
+    )
+    link = tmp_path / "aliased.py"
+    try:
+        link.symlink_to(tmp_path / "real.py")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted in this environment")
+
+    ignored = scan(str(tmp_path), Config())
+    assert ignored.stats.files_analyzed == 1
+    assert {finding.path for finding in ignored.findings} == {"real.py"}
+
+    followed = scan(str(tmp_path), Config(follow_symlinks=True))
+    # Cùng một tệp dưới hai cái tên: đi theo được liên kết, nhưng không quét
+    # hai lần rồi nhân đôi phát hiện.
+    assert followed.stats.files_analyzed == 1
+    assert any(finding.rule_id == "FSB-CMD-001" for finding in followed.findings)
+    # Khẳng định phân biệt được "đã đi theo" với "đã bỏ qua": đếm số tệp thì
+    # hai bên đều ra 1, vì tệp vẫn tới được qua tên thật. Chỉ đường dẫn báo về
+    # mới khác -- "aliased.py" đứng trước "real.py" khi duyệt theo thứ tự tên,
+    # nên nó là đường tới tệp khi liên kết được đi theo.
+    assert {finding.path for finding in followed.findings} == {"aliased.py"}
+
+
+def test_link_to_directory_inside_root_is_followed_when_enabled(tmp_path: Path):
+    """Cây con sau một liên kết thư mục phải được quét.
+
+    Đây là smoke test, không phải chốt chặn hồi quy: khi thư mục thật cũng
+    nằm ngay trong phạm vi quét thì "đi theo liên kết" và "bỏ qua liên kết"
+    cho ra kết quả giống hệt nhau -- tệp vẫn tới được qua đường thật, nên
+    không có con số nào phân biệt được hai hành vi. Chốt chặn thật nằm ở
+    test_entry_is_directory_asks_the_target_not_the_link.
+    """
+    root = tmp_path / "root"
+    (root / "realdir").mkdir(parents=True)
+    (root / "realdir" / "vuln.py").write_text(
+        "import os\nos.system(input())\n", encoding="utf-8"
+    )
+    try:
+        (root / "linkdir").symlink_to(root / "realdir", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted in this environment")
+
+    followed = scan(str(root), Config(follow_symlinks=True))
+    assert followed.stats.files_analyzed == 1
+    assert any(finding.rule_id == "FSB-CMD-001" for finding in followed.findings)
 
 
 def test_excluded_directories_are_not_scanned(tmp_path: Path):
@@ -224,6 +415,255 @@ def test_project_config_from_scanned_tree_is_declarative_only(tmp_path: Path):
     assert found is not None
     data = load_config_file(found)
     assert build_config(data).min_severity.label == "critical"
+
+
+def test_coverage_reduction_reaches_every_report_format(tmp_path: Path, capsys):
+    """Cấu hình trong cây bị quét bóp hẹp lượt quét thì MỌI báo cáo phải nói ra.
+
+    Chỉ ghi cảnh báo ra stderr là chưa đủ: người chạy `-f json -o bao-cao.json`
+    hay đẩy SARIF lên code scanning không đọc stderr. Một repo không hợp tác
+    có thể tự tắt gần hết khả năng phát hiện của công cụ đang quét nó, mà tệp
+    báo cáo cuối cùng vẫn trông sạch bong.
+    """
+    (tmp_path / "app.py").write_text(
+        "import os\nfrom flask import request\n"
+        "def h():\n    os.system('ping ' + request.args.get('h'))\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"disabled_rules": ["FSB-CMD-001"], "min_severity": "critical"}),
+        encoding="utf-8",
+    )
+
+    assert cli.main([str(tmp_path), "--quiet"]) == 0  # cấu hình đã làm báo cáo sạch
+
+    result = scan(
+        str(tmp_path),
+        build_config({"disabled_rules": ["FSB-CMD-001"]}),
+        None,
+        [ScanNotice(kind="project-config", summary="đã thu hẹp", details=("tắt rule",))],
+    )
+    assert not result.findings
+
+    payload = json.loads(to_json(result, "0.0.0"))
+    assert payload["notices"][0]["kind"] == "project-config"
+
+    sarif = json.loads(to_sarif(result, "0.0.0"))
+    notifications = sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+    assert any(item["descriptor"]["id"] == "project-config" for item in notifications)
+
+    markdown = to_markdown(result, "0.0.0")
+    assert "đã thu hẹp" in markdown
+    assert markdown.index("đã thu hẹp") < markdown.index("Không phát hiện")
+
+    ConsoleReporter(sys.stdout, color=False).render(result)
+    assert "đã thu hẹp" in capsys.readouterr().out
+
+
+def test_coverage_notice_cannot_smuggle_terminal_escapes(tmp_path: Path, capsys):
+    """Nội dung .fortress-scan.json đi vào cảnh báo thì phải qua neutralize().
+
+    Cảnh báo thu hẹp phạm vi được dựng bằng cách nội suy thẳng giá trị người
+    khác viết trong tệp cấu hình. Nó ra stderr trên mọi lượt chạy, kể cả
+    --quiet, và ra cả tệp Markdown - hai đường không có json.dumps đỡ hộ. Một
+    repo chỉ cần kèm theo tệp cấu hình là bắn được OSC 52 (ghi clipboard) hay
+    OSC 0 (đổi tiêu đề cửa sổ) vào terminal của người chạy công cụ.
+    """
+    payload = "\x1b]52;c;cHduZWQ=\x07" + "\x1b]0;PWNED\x07"
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"exclude": [payload]}), encoding="utf-8"
+    )
+
+    for arguments in ([str(tmp_path)], [str(tmp_path), "--quiet"]):
+        cli.main(arguments + ["--no-color"])
+        captured = capsys.readouterr()
+        assert "\x1b" not in captured.err and "\x07" not in captured.err
+        assert "\x1b" not in captured.out and "\x07" not in captured.out
+        assert "\\x1b" in captured.err  # vẫn hiện ra, chỉ là đã bị vô hiệu hóa
+
+    cli.main([str(tmp_path), "--no-color", "-f", "markdown"])
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.out and "\x07" not in captured.out
+    assert "\\x1b" in captured.out
+
+    # Tên khóa cũng do tệp cấu hình đặt, và nó đi vào thông báo cảnh báo khi
+    # tệp cấu hình hỏng bị bỏ qua. Tệp cấu hình tự tìm thấy trong cây bị quét
+    # là dữ liệu không tin cậy: nó hỏng thì lượt quét vẫn phải chạy tiếp bằng
+    # cấu hình mặc định, chứ không chết cả lượt.
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"\x1b]0;PWNED\x07": 1}), encoding="utf-8"
+    )
+    assert cli.main([str(tmp_path), "--no-color"]) == 0
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.err and "\x07" not in captured.err
+    assert "\\x1b" in captured.err  # vẫn hiện ra, chỉ là đã bị vô hiệu hóa
+
+
+def test_file_swapped_after_discovery_is_not_analysed(tmp_path: Path):
+    """Tệp bị tráo giữa lúc liệt kê và lúc mở thì không được phân tích.
+
+    Ai ghi được vào cây đang bị quét có thể lợi dụng khoảng trống đó để đẩy
+    một nội dung khác vào phần phân tích - và vào trích đoạn in ra báo cáo.
+    Kiểm trên `fstat` của handle đã mở, không kiểm lại đường dẫn.
+    """
+    target = tmp_path / "app.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    status = target.stat()
+    honest = (status.st_dev, status.st_ino)
+
+    source, _ = read_source(target, PYTHON, honest)
+    assert "value = 1" in source
+
+    # Cùng đường dẫn, nhưng đã là một tệp khác trên đĩa.
+    target.unlink()
+    target.write_text("import os\nos.system(input())\n", encoding="utf-8")
+    replaced = target.stat()
+    if (replaced.st_dev, replaced.st_ino) == honest:
+        pytest.skip("hệ thống tệp cấp lại đúng inode cũ nên không dựng được kịch bản")
+
+    with pytest.raises(FileChangedDuringScan):
+        read_source(target, PYTHON, honest)
+
+
+def test_coverage_reduction_can_gate_the_exit_code(tmp_path: Path):
+    """Mặc định vẫn thoát 0; chỉ khi bật cờ mới chặn được pipeline."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / ".fortress-scan.json").write_text(
+        json.dumps({"min_severity": "critical"}), encoding="utf-8"
+    )
+
+    assert cli.main([str(tmp_path), "--quiet"]) == 0
+    assert cli.main([str(tmp_path), "--quiet", "--fail-on-coverage-reduction"]) == 1
+    # Không có gì làm hẹp phạm vi thì cờ này phải im lặng.
+    assert cli.main([str(tmp_path), "--quiet", "--no-config", "--fail-on-coverage-reduction"]) == 0
+
+
+def _repo_with_a_hidden_backdoor(root: Path, ignore_name: str) -> None:
+    (root / "app").mkdir()
+    (root / "app" / "util.py").write_text(
+        "import html\ndef ok(v):\n    return html.escape(v)\n", encoding="utf-8"
+    )
+    (root / "app" / "session.py").write_text(
+        "import os\n"
+        "from flask import request\n"
+        "def run():\n"
+        "    os.system('ping ' + request.args.get('c'))\n",
+        encoding="utf-8",
+    )
+    (root / ignore_name).write_text("app/session.py\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("ignore_name", (".gitignore", ".fortress-scanignore"))
+def test_ignore_files_in_the_tree_cannot_hide_code_silently(
+    tmp_path: Path, ignore_name: str
+):
+    """Tệp ignore nằm TRONG cây được quét là do người viết repo đặt.
+
+    `.fortress-scan.json` thu hẹp phạm vi thì đã có cảnh báo từ trước, còn hai
+    tệp này thì chưa -- một repo giấu đúng tệp có lỗ hổng vẫn ra báo cáo "sạch"
+    với notices rỗng, errors rỗng và files_skipped bằng 0, không một dấu vết nào
+    cho người đọc biết là có mã chưa từng được soi.
+    """
+    _repo_with_a_hidden_backdoor(tmp_path, ignore_name)
+    result = scan(str(tmp_path), Config())
+
+    assert not result.findings, "phép thử chỉ có nghĩa khi backdoor thật sự bị giấu"
+    notice = next(
+        (item for item in result.notices if item.kind == "ignore-files-applied"), None
+    )
+    assert notice is not None, "mã bị gỡ khỏi lượt quét mà báo cáo không nói gì"
+    assert "1 tệp mã nguồn" in notice.summary
+
+
+def test_hidden_code_can_gate_the_exit_code(tmp_path: Path):
+    _repo_with_a_hidden_backdoor(tmp_path, ".gitignore")
+
+    assert cli.main([str(tmp_path), "--quiet"]) == 0
+    assert cli.main([str(tmp_path), "--quiet", "--fail-on-coverage-reduction"]) == 1
+    # Tắt tệp ignore đi thì backdoor lộ ra, và mã thoát đổi vì phát hiện thật.
+    assert cli.main([str(tmp_path), "--quiet", "--no-vcs-ignore"]) == 1
+
+
+def test_the_ignore_notice_reaches_every_output_format(tmp_path: Path):
+    """Người đọc JSON hay SARIF cũng cần biết vì sao báo cáo lại sạch."""
+    _repo_with_a_hidden_backdoor(tmp_path, ".gitignore")
+    result = scan(str(tmp_path), Config())
+
+    payload = json.loads(to_json(result, "0.0.0"))
+    assert any(item["kind"] == "ignore-files-applied" for item in payload["notices"])
+
+    sarif = json.loads(to_sarif(result, "0.0.0"))
+    notifications = sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+    assert any(
+        item["descriptor"]["id"] == "ignore-files-applied" for item in notifications
+    )
+
+    assert "Phạm vi quét đã bị thu hẹp" in to_markdown(result, "0.0.0")
+
+
+def test_a_path_the_user_excluded_is_not_warned_about(tmp_path: Path):
+    """--exclude là lựa chọn của chính người chạy, không phải của cây bị quét.
+
+    Cảnh báo ngược lại họ về quyết định họ vừa gõ ra là đúng loại nhiễu làm
+    người ta ngừng đọc cảnh báo.
+    """
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "session.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "app" / "util.py").write_text("value = 2\n", encoding="utf-8")
+
+    result = scan(str(tmp_path), Config(exclude_patterns=("app/session.py",)))
+    assert result.stats.files_analyzed == 1
+    assert not any(item.kind == "ignore-files-applied" for item in result.notices)
+
+
+def test_a_routine_gitignore_stays_quiet(tmp_path: Path):
+    """Gitignore điển hình chỉ che tạo phẩm build, và những thứ đó đã nằm sẵn
+    trong danh sách loại trừ mặc định -- không có mã nguồn nào mất đi, nên
+    không có gì để cảnh báo."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "notes.log").write_text("dòng log\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(
+        "__pycache__/\n*.py[cod]\n*.log\nbuild/\ndist/\n.venv/\n", encoding="utf-8"
+    )
+
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 1
+    assert not any(item.kind == "ignore-files-applied" for item in result.notices)
+
+
+def test_default_excluded_directories_are_counted(tmp_path: Path):
+    """Danh sách loại trừ mặc định là quyết định của công cụ chứ không phải của
+    repo, nên nó vào thống kê chứ không thành CẢNH BÁO -- nhưng vẫn phải đếm
+    được, vì `dist/` là chỗ đầu tiên người ta nghĩ tới khi muốn giấu mã."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "loader.py").write_text("value = 2\n", encoding="utf-8")
+
+    result = scan(str(tmp_path), Config())
+    assert result.stats.files_analyzed == 1
+    assert result.stats.directories_excluded == 1
+    assert not any(item.kind == "ignore-files-applied" for item in result.notices)
+
+
+def test_skipped_links_are_reported_not_just_counted(tmp_path: Path):
+    """Liên kết bị bỏ qua là mã chưa từng được soi -- phải nói ra, không chỉ
+    nằm im trong một con số ở JSON."""
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "v.py").write_text("value = 1\n", encoding="utf-8")
+    try:
+        (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted in this environment")
+
+    result = scan(str(tmp_path), Config())
+    assert any(notice.kind == "links-skipped" for notice in result.notices)
+    assert "links-skipped" in to_markdown(result, "0.0.0") or any(
+        "liên kết" in notice.summary for notice in result.notices
+    )
+
+    followed = scan(str(tmp_path), Config(follow_symlinks=True))
+    assert not any(notice.kind == "links-skipped" for notice in followed.notices)
 
 
 def test_serializer_round_trip_is_not_an_injection():
@@ -277,3 +717,41 @@ def handler():
 """
     ids = [finding.rule_id for finding in scan_source(source, PYTHON, "app.py", Config())]
     assert "FSB-CMD-001" in ids
+
+
+def test_quiet_does_not_swallow_machine_output_or_files(tmp_path: Path, capsys):
+    """--quiet im phần người đọc, không im sản phẩm anh em yêu cầu bằng cờ.
+
+    Trước 0.2.1, `-f json --quiet` in ra chuỗi rỗng ( CI gõ | jq là chết )
+    và `-o file --quiet` không ghi tệp nào dù vẫn báo exit như thường.
+    """
+    (tmp_path / "app.py").write_text(
+        "from flask import request\n"
+        "import os\n"
+        "def handler():\n"
+        "    os.system('ping ' + request.args.get('h'))\n",
+        encoding="utf-8",
+    )
+
+    code = cli.main([str(tmp_path), "-f", "json", "--quiet", "--no-config", "--exit-zero"])
+    captured = capsys.readouterr()
+    assert code == 0
+    payload = json.loads(captured.out)
+    assert payload["findings"]
+
+    target = tmp_path / "bao-cao.json"
+    cli.main([str(tmp_path), "-f", "json", "--quiet", "-o", str(target), "--exit-zero"])
+    capsys.readouterr()
+    assert target.is_file()
+    assert json.loads(target.read_text(encoding="utf-8"))["findings"]
+
+
+def test_console_format_with_output_file_writes_console_text(tmp_path: Path):
+    """`-f console -o file` từng lặng lẽ ghi markdown - người dùng xin gì
+    thì phải nhận đúng cái đó."""
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    target = tmp_path / "bao-cao.txt"
+    cli.main([str(tmp_path), "-f", "console", "-o", str(target), "--no-config", "--exit-zero"])
+    content = target.read_text(encoding="utf-8")
+    assert "đã phân tích" in content
+    assert not content.lstrip().startswith("#")

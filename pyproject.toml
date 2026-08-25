@@ -21,7 +21,7 @@ keywords = [
     "command-injection",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
@@ -40,7 +40,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4"]
+dev = ["pytest>=7.4", "ruff==0.14.1"]
 
 [project.scripts]
 fortress-scan = "fortress_scan.cli:main"
@@ -55,8 +55,21 @@ Contact = "mailto:vophuvinh15012007@gmail.com"
 packages = ["src/fortress_scan"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE"]
+include = ["src", "tests", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Test luôn chạy trên src/ của chính bản sao đang sửa. Thiếu dòng này thì
+# `import fortress_scan` rơi vào bản `pip install -e` đang trỏ đi đâu đó,
+# và cả bộ test xanh mà không hề chạm vào thay đổi vừa viết.
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+# Ghim đúng bộ rule của bản ruff trong dev extra: bản mới hơn mở rộng mặc
+# định theo hướng đòi cú pháp 3.10+ ( PEP 585/604 trần trụi ) mà dự án vẫn
+# hỗ trợ 3.9, nên để mặc định trôi theo phiên bản là tự làm CI đỏ ngẫu nhiên.
+# tests/samples là corpus lỗi CÓ Ý ĐỊNH ( Trojan Source, ký tự ẩn ) - ruff
+# sẽ báo invalid-syntax trên chính những thứ nó cần tồn tại.
+extend-exclude = ["tests/samples"]

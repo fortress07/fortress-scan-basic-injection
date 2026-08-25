@@ -4,7 +4,20 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Optional, Tuple
 
 from ...core.model import Category, Confidence
-from ...languages import CSHARP, GO, JAVA, JAVASCRIPT, PHP, RUBY, SHELL, TYPESCRIPT
+from ...languages import (
+    CSHARP,
+    GO,
+    JAVA,
+    JAVASCRIPT,
+    LUA,
+    PERL,
+    PHP,
+    POWERSHELL,
+    RUBY,
+    RUST,
+    SHELL,
+    TYPESCRIPT,
+)
 from .lexer import LexerProfile
 
 
@@ -28,15 +41,52 @@ class LanguageSpec:
     sources: Dict[str, str]
     sinks: Tuple[GenericSink, ...]
     assignment_sinks: Dict[str, Tuple[str, Category, str]] = field(default_factory=dict)
-    sanitizers: FrozenSet[str] = frozenset()
+    # Mỗi bộ khử độc kèm ĐÚNG những nhóm nó thật sự khử, giống hệt bảng
+    # SANITIZERS bên phân tích Python. Một tập tên phẳng, không nhóm, nói rằng
+    # htmlspecialchars() khử được cả command injection -- mà nó không đụng tới
+    # một ký tự đặc biệt nào của shell.
+    sanitizers: Dict[str, FrozenSet[Category]] = field(default_factory=dict)
     weak_sanitizers: FrozenSet[str] = frozenset()
     declaration_keywords: FrozenSet[str] = frozenset()
     chain_separators: Tuple[str, ...] = (".",)
+    # Languages that write the type after the name (``const x: T = ...``) need
+    # it stripped, or the type name gets bound as the assignment target.
+    annotation_separator: Optional[str] = None
     annotation_sources: Dict[str, str] = field(default_factory=dict)
     backtick_command: bool = False
     bare_call_names: FrozenSet[str] = frozenset()
     assignment_operators: Tuple[str, ...] = ("=", "+=", ".=")
+    # Cú pháp ép kiểu dạng tiền tố: `[int]$x` của PowerShell, `(int)x` của C#.
+    # Đây là cách khử độc IDIOMATIC nhất của những ngôn ngữ đó -- không đọc
+    # được nó thì mọi script viết đúng đều bị kêu, mà bảng sanitizers lại chỉ
+    # nhận dạng `ten(...)`.
+    cast_delimiters: Tuple[str, str] = ()
 
+
+# Ép về số hoặc UUID thì không còn ký tự đặc biệt nào sống sót, ở bất kỳ nhóm
+# nào. Đây là nhóm duy nhất xứng đáng với "khử sạch mọi thứ".
+_ALL_CATEGORIES: FrozenSet[Category] = frozenset(Category)
+
+# Bộ thoát HTML chỉ đổi < > & " thành thực thể. Dấu ; | & $ ` của shell và dấu
+# nháy đơn của SQL đi qua nguyên vẹn.
+_HTML_ONLY: FrozenSet[Category] = frozenset({Category.MARKUP})
+
+# Bộ trích dẫn shell chỉ lo cho shell. escapeshellarg() bọc chuỗi trong nháy
+# đơn, đưa thẳng vào một câu SQL thì nháy đơn đó lại là ký tự phá cú pháp.
+_COMMAND_ONLY: FrozenSet[Category] = frozenset({Category.COMMAND})
+
+# basename() cắt phần thư mục, đúng cho file inclusion. basename("a;id") vẫn
+# trả về "a;id" -- không giúp gì cho một câu lệnh shell.
+_PATH_ONLY: FrozenSet[Category] = frozenset({Category.DYNAMIC_IMPORT})
+
+# encodeURIComponent() mã hoá < > ; | & $ ` nhưng KHÔNG mã hoá dấu nháy đơn:
+# nó nằm trong tập ký tự không dè dặt của RFC 3986. Nên nó chặn được XSS và
+# lệnh shell, còn SQL thì không.
+_URI_COMPONENT: FrozenSet[Category] = frozenset({Category.MARKUP, Category.COMMAND})
+
+# preg_quote() thoát ký tự đặc biệt của regex. Dấu nháy đơn và dấu chấm phẩy
+# không nằm trong danh sách đó, nên nó không khử được nhóm nào ở đây.
+_NOTHING: FrozenSet[Category] = frozenset()
 
 _JS_LEXER = LexerProfile(
     line_comments=("//",),
@@ -125,13 +175,29 @@ _SHELL_LEXER = LexerProfile(
 )
 
 
+# Mô tả của sink hiện thẳng trong thông điệp báo cáo, và cùng một mô tả được
+# dùng lại cho hàng chục API ở mười ngôn ngữ. Gõ tay mỗi lần thì chỉ cần sai
+# một bản là báo cáo mô tả cùng một loại điểm nguy hiểm theo hai kiểu khác nhau --
+# cùng lý do đã gộp nhãn nguồn dữ liệu thành hằng số ở ngay dưới.
+SINK_EVAL = "eval()"
+SINK_SHELL_COMMAND = "một lệnh shell"
+SINK_PROCESS_SPAWN = "việc tạo tiến trình"
+SINK_SQL_QUERY = "một truy vấn SQL"
+SINK_MODULE_LOAD = "việc nạp module"
+SINK_OUTBOUND_URL = "một URL gửi request ra ngoài"
+SINK_REDIRECT = "lệnh chuyển hướng"
+SINK_FILE_PATH = "một đường dẫn tệp"
+SINK_RAW_HTML = "nơi xuất HTML thô"
+SINK_OBJECT_DESERIALIZER = "một bộ giải tuần tự đối tượng"
+SINK_TEMPLATE_COMPILER = "một trình biên dịch template"
+
 _JS_SINKS: Tuple[GenericSink, ...] = (
     GenericSink(
         ("eval", "globalEval", "window.eval", "geval"),
         Category.CODE_EXECUTION,
         "FSB-EXEC-001",
         "FSB-EXEC-002",
-        "eval()",
+        SINK_EVAL,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -161,7 +227,7 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "một lệnh shell",
+        SINK_SHELL_COMMAND,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -169,7 +235,7 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-002",
         None,
-        "việc tạo tiến trình",
+        SINK_PROCESS_SPAWN,
         program_position=True,
     ),
     GenericSink(
@@ -177,7 +243,7 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -185,21 +251,50 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
         Category.DYNAMIC_IMPORT,
         "FSB-IMPORT-001",
         "FSB-IMPORT-002",
-        "việc nạp module",
+        SINK_MODULE_LOAD,
+    ),
+    GenericSink(
+        ("fetch", "axios.get", "axios.post", "axios.put", "axios.delete", "axios.request"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        SINK_OUTBOUND_URL,
+    ),
+    GenericSink(
+        ("redirect",),
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        SINK_REDIRECT,
+    ),
+    GenericSink(
+        ("setHeader",),
+        Category.HTTP_HEADER,
+        "FSB-HDR-001",
+        None,
+        "header HTTP của phản hồi",
+        argument_index=1,
+    ),
+    GenericSink(
+        ("readFile", "readFileSync", "createReadStream", "download", "sendFile"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
     ),
     GenericSink(
         ("write", "writeln", "document.write", "document.writeln", "insertAdjacentHTML", "html"),
         Category.MARKUP,
         "FSB-XSS-001",
         None,
-        "nơi xuất HTML thô",
+        SINK_RAW_HTML,
     ),
     GenericSink(
         ("unserialize", "node_serialize.unserialize", "serialize.unserialize"),
         Category.DESERIALIZATION,
         "FSB-DESER-001",
         "FSB-DESER-002",
-        "một bộ giải tuần tự đối tượng",
+        SINK_OBJECT_DESERIALIZER,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -211,38 +306,55 @@ _JS_SINKS: Tuple[GenericSink, ...] = (
     ),
 )
 
+# Nhãn nguồn dữ liệu hiện thẳng trong báo cáo, và cùng một nhãn được dùng lại
+# cho hàng chục API khác nhau. Gõ tay mỗi lần thì chỉ cần sai một bản là báo
+# cáo mô tả cùng một loại nguồn theo hai kiểu khác nhau.
+QUERY_PARAM = "tham số truy vấn HTTP"
+REQUEST_BODY = "body của request HTTP"
+PATH_PARAM = "tham số đường dẫn HTTP"
+HTTP_HEADER = "header HTTP"
+HTTP_COOKIE = "cookie HTTP"
+REQUEST_PARAM = "tham số của request HTTP"
+FORM_FIELD = "trường form HTTP"
+URL_QUERY_FRAGMENT = "fragment hoặc query của URL"
+DOCUMENT_URL = "URL của tài liệu"
+COMMAND_LINE_ARG = "tham số dòng lệnh"
+ENVIRONMENT_VARIABLE = "biến môi trường"
+QUERY_STRING = "query string HTTP"
+STANDARD_INPUT = "luồng nhập chuẩn"
+
 _JS_SOURCES: Dict[str, str] = {
-    "req.query": "tham số truy vấn HTTP",
-    "req.body": "body của request HTTP",
-    "req.params": "tham số đường dẫn HTTP",
-    "req.headers": "header HTTP",
-    "req.cookies": "cookie HTTP",
-    "req.rawBody": "body của request HTTP",
-    "req.param": "tham số của request HTTP",
-    "req.get": "header HTTP",
-    "request.query": "tham số truy vấn HTTP",
-    "request.body": "body của request HTTP",
-    "request.params": "tham số đường dẫn HTTP",
-    "request.headers": "header HTTP",
-    "ctx.query": "tham số truy vấn HTTP",
+    "req.query": QUERY_PARAM,
+    "req.body": REQUEST_BODY,
+    "req.params": PATH_PARAM,
+    "req.headers": HTTP_HEADER,
+    "req.cookies": HTTP_COOKIE,
+    "req.rawBody": REQUEST_BODY,
+    "req.param": REQUEST_PARAM,
+    "req.get": HTTP_HEADER,
+    "request.query": QUERY_PARAM,
+    "request.body": REQUEST_BODY,
+    "request.params": PATH_PARAM,
+    "request.headers": HTTP_HEADER,
+    "ctx.query": QUERY_PARAM,
     "ctx.request": "request HTTP",
-    "ctx.params": "tham số đường dẫn HTTP",
-    "location.search": "fragment hoặc query của URL",
-    "location.hash": "fragment hoặc query của URL",
-    "location.href": "fragment hoặc query của URL",
+    "ctx.params": PATH_PARAM,
+    "location.search": URL_QUERY_FRAGMENT,
+    "location.hash": URL_QUERY_FRAGMENT,
+    "location.href": URL_QUERY_FRAGMENT,
     "location.pathname": "đường dẫn URL",
-    "window.location": "fragment hoặc query của URL",
+    "window.location": URL_QUERY_FRAGMENT,
     "window.name": "tên cửa sổ",
-    "document.URL": "URL của tài liệu",
-    "document.documentURI": "URL của tài liệu",
+    "document.URL": DOCUMENT_URL,
+    "document.documentURI": DOCUMENT_URL,
     "document.referrer": "referrer của tài liệu",
-    "document.location": "URL của tài liệu",
+    "document.location": DOCUMENT_URL,
     "localStorage.getItem": "kho lưu trữ trình duyệt",
     "sessionStorage.getItem": "kho lưu trữ trình duyệt",
     "event.data": "dữ liệu sự kiện message",
     "event.body": "dữ liệu sự kiện",
     "event.queryStringParameters": "dữ liệu sự kiện",
-    "process.argv": "tham số dòng lệnh",
+    "process.argv": COMMAND_LINE_ARG,
 }
 
 _PHP_SINKS: Tuple[GenericSink, ...] = (
@@ -251,7 +363,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.CODE_EXECUTION,
         "FSB-EXEC-001",
         "FSB-EXEC-002",
-        "eval()",
+        SINK_EVAL,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -267,7 +379,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "một lệnh shell",
+        SINK_SHELL_COMMAND,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -275,7 +387,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         argument_index=1,
         require_sql=True,
     ),
@@ -284,7 +396,7 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -302,6 +414,28 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
         "FSB-IMPORT-002",
         "một lệnh nạp tệp",
         confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("header",),
+        Category.HTTP_HEADER,
+        "FSB-HDR-001",
+        None,
+        "header()",
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("file_get_contents", "curl_exec"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        "một URL lấy nội dung từ xa",
+    ),
+    GenericSink(
+        ("fopen", "readfile", "file_put_contents"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
     ),
     GenericSink(
         ("call_user_func", "call_user_func_array", "array_map", "usort"),
@@ -335,19 +469,19 @@ _PHP_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _PHP_SOURCES: Dict[str, str] = {
-    "$_GET": "tham số truy vấn HTTP",
-    "$_POST": "trường form HTTP",
-    "$_REQUEST": "tham số của request HTTP",
-    "$_COOKIE": "cookie HTTP",
+    "$_GET": QUERY_PARAM,
+    "$_POST": FORM_FIELD,
+    "$_REQUEST": REQUEST_PARAM,
+    "$_COOKIE": HTTP_COOKIE,
     "$_SERVER": "biến server HTTP",
     "$_FILES": "tệp tải lên qua HTTP",
-    "$_ENV": "biến môi trường",
-    "$HTTP_RAW_POST_DATA": "body của request HTTP",
-    "$argv": "tham số dòng lệnh",
-    "getenv": "biến môi trường",
-    "filter_input": "tham số của request HTTP",
-    "apache_request_headers": "header HTTP",
-    "getallheaders": "header HTTP",
+    "$_ENV": ENVIRONMENT_VARIABLE,
+    "$HTTP_RAW_POST_DATA": REQUEST_BODY,
+    "$argv": COMMAND_LINE_ARG,
+    "getenv": ENVIRONMENT_VARIABLE,
+    "filter_input": REQUEST_PARAM,
+    "apache_request_headers": HTTP_HEADER,
+    "getallheaders": HTTP_HEADER,
 }
 
 _JAVA_SINKS: Tuple[GenericSink, ...] = (
@@ -429,32 +563,32 @@ _JAVA_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _JAVA_SOURCES: Dict[str, str] = {
-    "request.getParameter": "tham số truy vấn HTTP",
-    "request.getParameterValues": "tham số truy vấn HTTP",
-    "request.getHeader": "header HTTP",
-    "request.getHeaders": "header HTTP",
-    "request.getQueryString": "query string HTTP",
-    "request.getCookies": "cookie HTTP",
-    "request.getInputStream": "body của request HTTP",
-    "request.getReader": "body của request HTTP",
+    "request.getParameter": QUERY_PARAM,
+    "request.getParameterValues": QUERY_PARAM,
+    "request.getHeader": HTTP_HEADER,
+    "request.getHeaders": HTTP_HEADER,
+    "request.getQueryString": QUERY_STRING,
+    "request.getCookies": HTTP_COOKIE,
+    "request.getInputStream": REQUEST_BODY,
+    "request.getReader": REQUEST_BODY,
     "request.getRequestURI": "đường dẫn của request HTTP",
     "request.getPathInfo": "đường dẫn của request HTTP",
-    "req.getParameter": "tham số truy vấn HTTP",
-    "req.getHeader": "header HTTP",
-    "System.getenv": "biến môi trường",
+    "req.getParameter": QUERY_PARAM,
+    "req.getHeader": HTTP_HEADER,
+    "System.getenv": ENVIRONMENT_VARIABLE,
     "System.getProperty": "thuộc tính hệ thống",
 }
 
 _JAVA_ANNOTATIONS: Dict[str, str] = {
-    "RequestParam": "tham số truy vấn HTTP",
-    "PathVariable": "tham số đường dẫn HTTP",
-    "RequestBody": "body của request HTTP",
-    "RequestHeader": "header HTTP",
-    "CookieValue": "cookie HTTP",
-    "QueryParam": "tham số truy vấn HTTP",
-    "PathParam": "tham số đường dẫn HTTP",
-    "FormParam": "trường form HTTP",
-    "HeaderParam": "header HTTP",
+    "RequestParam": QUERY_PARAM,
+    "PathVariable": PATH_PARAM,
+    "RequestBody": REQUEST_BODY,
+    "RequestHeader": HTTP_HEADER,
+    "CookieValue": HTTP_COOKIE,
+    "QueryParam": QUERY_PARAM,
+    "PathParam": PATH_PARAM,
+    "FormParam": FORM_FIELD,
+    "HeaderParam": HTTP_HEADER,
 }
 
 _RUBY_SINKS: Tuple[GenericSink, ...] = (
@@ -463,7 +597,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.CODE_EXECUTION,
         "FSB-EXEC-001",
         "FSB-EXEC-002",
-        "eval()",
+        SINK_EVAL,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -471,7 +605,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "một lệnh shell",
+        SINK_SHELL_COMMAND,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -486,7 +620,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -494,7 +628,7 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.DESERIALIZATION,
         "FSB-DESER-001",
         "FSB-DESER-002",
-        "một bộ giải tuần tự đối tượng",
+        SINK_OBJECT_DESERIALIZER,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -502,22 +636,22 @@ _RUBY_SINKS: Tuple[GenericSink, ...] = (
         Category.TEMPLATE,
         "FSB-TMPL-001",
         "FSB-TMPL-002",
-        "một trình biên dịch template",
+        SINK_TEMPLATE_COMPILER,
     ),
 )
 
 _RUBY_SOURCES: Dict[str, str] = {
-    "params": "tham số của request HTTP",
-    "request.params": "tham số của request HTTP",
-    "request.body": "body của request HTTP",
-    "request.query_string": "query string HTTP",
-    "request.env": "header HTTP",
-    "cookies": "cookie HTTP",
+    "params": REQUEST_PARAM,
+    "request.params": REQUEST_PARAM,
+    "request.body": REQUEST_BODY,
+    "request.query_string": QUERY_STRING,
+    "request.env": HTTP_HEADER,
+    "cookies": HTTP_COOKIE,
     "session": "giá trị session",
-    "ENV": "biến môi trường",
-    "ARGV": "tham số dòng lệnh",
-    "gets": "luồng nhập chuẩn",
-    "STDIN.gets": "luồng nhập chuẩn",
+    "ENV": ENVIRONMENT_VARIABLE,
+    "ARGV": COMMAND_LINE_ARG,
+    "gets": STANDARD_INPUT,
+    "STDIN.gets": STANDARD_INPUT,
 }
 
 _GO_SINKS: Tuple[GenericSink, ...] = (
@@ -535,7 +669,7 @@ _GO_SINKS: Tuple[GenericSink, ...] = (
         Category.SQL,
         "FSB-SQL-001",
         "FSB-SQL-002",
-        "một truy vấn SQL",
+        SINK_SQL_QUERY,
         require_sql=True,
     ),
     GenericSink(
@@ -550,7 +684,7 @@ _GO_SINKS: Tuple[GenericSink, ...] = (
         Category.TEMPLATE,
         "FSB-TMPL-001",
         None,
-        "một trình biên dịch template",
+        SINK_TEMPLATE_COMPILER,
     ),
     GenericSink(
         ("gob.NewDecoder", "Decode"),
@@ -562,18 +696,18 @@ _GO_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _GO_SOURCES: Dict[str, str] = {
-    "r.URL.Query": "tham số truy vấn HTTP",
-    "r.FormValue": "trường form HTTP",
-    "r.PostFormValue": "trường form HTTP",
-    "r.Header.Get": "header HTTP",
-    "r.Body": "body của request HTTP",
-    "req.URL.Query": "tham số truy vấn HTTP",
-    "req.FormValue": "trường form HTTP",
-    "mux.Vars": "tham số đường dẫn HTTP",
-    "c.Param": "tham số đường dẫn HTTP",
-    "c.Query": "tham số truy vấn HTTP",
-    "os.Args": "tham số dòng lệnh",
-    "os.Getenv": "biến môi trường",
+    "r.URL.Query": QUERY_PARAM,
+    "r.FormValue": FORM_FIELD,
+    "r.PostFormValue": FORM_FIELD,
+    "r.Header.Get": HTTP_HEADER,
+    "r.Body": REQUEST_BODY,
+    "req.URL.Query": QUERY_PARAM,
+    "req.FormValue": FORM_FIELD,
+    "mux.Vars": PATH_PARAM,
+    "c.Param": PATH_PARAM,
+    "c.Query": QUERY_PARAM,
+    "os.Args": COMMAND_LINE_ARG,
+    "os.Getenv": ENVIRONMENT_VARIABLE,
 }
 
 _CSHARP_SINKS: Tuple[GenericSink, ...] = (
@@ -582,7 +716,7 @@ _CSHARP_SINKS: Tuple[GenericSink, ...] = (
         Category.COMMAND,
         "FSB-CMD-001",
         "FSB-CMD-003",
-        "việc tạo tiến trình",
+        SINK_PROCESS_SPAWN,
         confidence=Confidence.HIGH,
     ),
     GenericSink(
@@ -634,14 +768,14 @@ _CSHARP_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _CSHARP_SOURCES: Dict[str, str] = {
-    "Request.QueryString": "tham số truy vấn HTTP",
-    "Request.Form": "trường form HTTP",
-    "Request.Params": "tham số của request HTTP",
-    "Request.Headers": "header HTTP",
-    "Request.Cookies": "cookie HTTP",
-    "Request.Body": "body của request HTTP",
-    "Request.Query": "tham số truy vấn HTTP",
-    "Environment.GetEnvironmentVariable": "biến môi trường",
+    "Request.QueryString": QUERY_PARAM,
+    "Request.Form": FORM_FIELD,
+    "Request.Params": REQUEST_PARAM,
+    "Request.Headers": HTTP_HEADER,
+    "Request.Cookies": HTTP_COOKIE,
+    "Request.Body": REQUEST_BODY,
+    "Request.Query": QUERY_PARAM,
+    "Environment.GetEnvironmentVariable": ENVIRONMENT_VARIABLE,
 }
 
 _SHELL_SINKS: Tuple[GenericSink, ...] = (
@@ -663,18 +797,389 @@ _SHELL_SINKS: Tuple[GenericSink, ...] = (
 )
 
 _SHELL_SOURCES: Dict[str, str] = {
-    "$1": "tham số dòng lệnh",
-    "$2": "tham số dòng lệnh",
-    "$3": "tham số dòng lệnh",
-    "$4": "tham số dòng lệnh",
-    "$5": "tham số dòng lệnh",
-    "$@": "tham số dòng lệnh",
-    "$*": "tham số dòng lệnh",
-    "$REPLY": "luồng nhập chuẩn",
-    "$QUERY_STRING": "query string HTTP",
-    "$HTTP_USER_AGENT": "header HTTP",
+    "$1": COMMAND_LINE_ARG,
+    "$2": COMMAND_LINE_ARG,
+    "$3": COMMAND_LINE_ARG,
+    "$4": COMMAND_LINE_ARG,
+    "$5": COMMAND_LINE_ARG,
+    "$@": COMMAND_LINE_ARG,
+    "$*": COMMAND_LINE_ARG,
+    "$REPLY": STANDARD_INPUT,
+    "$QUERY_STRING": QUERY_STRING,
+    "$HTTP_USER_AGENT": HTTP_HEADER,
     "$GITHUB_HEAD_REF": "tham chiếu CI không tin cậy",
     "$GITHUB_EVENT_NAME": "đầu vào CI không tin cậy",
+}
+
+
+_RUST_LEXER = LexerProfile(
+    line_comments=("//",),
+    block_comments=(("/*", "*/"),),
+    # Rust KHÔNG có chuỗi nháy đơn. Dấu nháy đơn ở đây là literal ký tự
+    # ( 'a' ) và, quan trọng hơn, là lifetime ( &'a str, Vec<'static> ) --
+    # coi nó là mở chuỗi thì mọi struct có lifetime đều nuốt phần còn lại
+    # của tệp vào trong một chuỗi không bao giờ đóng.
+    plain_quotes=(),
+    interpolating_quotes=('"',),
+    interpolation_markers=(("{", "}"),),
+    identifier_extra="_",
+    multichar_operators=(
+        "::",
+        "->",
+        "=>",
+        "==",
+        "!=",
+        "<=",
+        ">=",
+        "&&",
+        "||",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "..=",
+        "..",
+    ),
+)
+
+_POWERSHELL_LEXER = LexerProfile(
+    line_comments=("#",),
+    block_comments=(("<#", "#>"),),
+    plain_quotes=("'",),
+    interpolating_quotes=('"',),
+    interpolation_markers=(("$(", ")"),),
+    dollar_interpolation=True,
+    identifier_extra="_$:-",
+    heredoc_markers=("@\"", "@'"),
+    multichar_operators=("-eq", "-ne", "-like", "-match", "::", "|", "&&", "||", "+="),
+)
+
+_PERL_LEXER = LexerProfile(
+    line_comments=("#",),
+    block_comments=(),
+    plain_quotes=("'",),
+    interpolating_quotes=('"',),
+    interpolation_markers=(("${", "}"), ("@{", "}")),
+    dollar_interpolation=True,
+    identifier_extra="_$@%:",
+    heredoc_markers=("<<",),
+    heredoc_bare_adjacent=True,
+    multichar_operators=("=>", "->", "==", "!=", "<=", ">=", "&&", "||", "=~", "::", ".="),
+)
+
+_LUA_LEXER = LexerProfile(
+    line_comments=("--",),
+    block_comments=(("--[[", "]]"),),
+    plain_quotes=("'",),
+    interpolating_quotes=('"',),
+    interpolation_markers=(),
+    raw_quotes=("[[",),
+    identifier_extra="_",
+    multichar_operators=("==", "~=", "<=", ">=", "..", "::"),
+)
+
+
+_RUST_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("Command.new", "process.Command.new", "std.process.Command.new"),
+        Category.COMMAND,
+        "FSB-CMD-002",
+        None,
+        SINK_PROCESS_SPAWN,
+        program_position=True,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("sql_query", "sqlx.query", "sqlx.query_as", "query_unchecked", "raw_sql"),
+        Category.SQL,
+        "FSB-SQL-001",
+        "FSB-SQL-002",
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+    GenericSink(
+        ("execute", "query", "query_row", "prepare"),
+        Category.SQL,
+        "FSB-SQL-001",
+        None,
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+    GenericSink(
+        ("render_template", "register_template_string", "Tera.one_off"),
+        Category.TEMPLATE,
+        "FSB-TMPL-001",
+        "FSB-TMPL-002",
+        SINK_TEMPLATE_COMPILER,
+    ),
+    GenericSink(
+        ("File.open", "fs.read", "fs.read_to_string", "fs.write", "NamedFile.open"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
+    ),
+    GenericSink(
+        ("reqwest.get", "Client.get", "get", "Url.parse"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        SINK_OUTBOUND_URL,
+    ),
+    GenericSink(
+        ("Library.new", "libloading.Library.new"),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        "FSB-IMPORT-002",
+        "việc nạp thư viện động",
+    ),
+    GenericSink(
+        ("Redirect.to", "Redirect.temporary", "Redirect.permanent"),
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        SINK_REDIRECT,
+    ),
+    GenericSink(
+        ("Html", "PreEscaped", "raw_html"),
+        Category.MARKUP,
+        "FSB-XSS-001",
+        None,
+        SINK_RAW_HTML,
+    ),
+)
+
+_RUST_SOURCES: Dict[str, str] = {
+    "env.args": COMMAND_LINE_ARG,
+    "std.env.args": COMMAND_LINE_ARG,
+    "env.var": ENVIRONMENT_VARIABLE,
+    "std.env.var": ENVIRONMENT_VARIABLE,
+    "req.query_string": QUERY_STRING,
+    "req.match_info": PATH_PARAM,
+    "req.headers": HTTP_HEADER,
+    "request.headers": HTTP_HEADER,
+    "web.Query": QUERY_PARAM,
+    "web.Path": PATH_PARAM,
+    "web.Form": FORM_FIELD,
+    "web.Json": REQUEST_BODY,
+    "Query": QUERY_PARAM,
+    "Path": PATH_PARAM,
+    "Form": FORM_FIELD,
+    "stdin": STANDARD_INPUT,
+    "read_line": STANDARD_INPUT,
+}
+
+# PowerShell gọi cmdlet không có dấu ngoặc, nên bộ đọc không tách được đối số
+# thật khỏi tên tham số: trong `Start-Process -FilePath ping` thì `-FilePath`
+# cũng là một định danh. Phép hỏi "giá trị này có phải hằng không" vì thế luôn
+# trả lời "không", kể cả trên dòng đúng chuẩn nhất, nên các sink ở đây bỏ hẳn
+# dynamic_rule và chỉ báo khi có vết nhiễm thật.
+#
+# Invoke-Expression là ngoại lệ: nhận một giá trị không phải hằng thì tự nó đã
+# đáng rà, bất kể có dựng được đường đi hay không.
+_POWERSHELL_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("Invoke-Expression", "iex", "IEX"),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        "FSB-EXEC-002",
+        "Invoke-Expression",
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("Add-Type", "ScriptBlock.Create", "Invoke-Command"),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        None,
+        "việc biên dịch mã lúc chạy",
+    ),
+    GenericSink(
+        ("Start-Process", "Invoke-Item", "cmd.exe", "Start-Job"),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        None,
+        SINK_SHELL_COMMAND,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("Invoke-Sqlcmd", "ExecuteReader", "ExecuteNonQuery", "ExecuteScalar"),
+        Category.SQL,
+        "FSB-SQL-001",
+        None,
+        "một câu lệnh SQL",
+        require_sql=True,
+    ),
+    GenericSink(
+        ("Import-Module", "Import-Clixml"),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        None,
+        SINK_MODULE_LOAD,
+    ),
+    GenericSink(
+        ("Invoke-WebRequest", "Invoke-RestMethod", "wget", "curl"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        SINK_OUTBOUND_URL,
+    ),
+    GenericSink(
+        ("Get-Content", "Set-Content", "Out-File", "Remove-Item"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
+    ),
+)
+
+_POWERSHELL_SOURCES: Dict[str, str] = {
+    "$args": COMMAND_LINE_ARG,
+    "$Args": COMMAND_LINE_ARG,
+    "$input": STANDARD_INPUT,
+    "$PSBoundParameters": "tham số của script",
+    "Read-Host": STANDARD_INPUT,
+    "$env:QUERY_STRING": QUERY_STRING,
+    "$env:GITHUB_HEAD_REF": "tham chiếu CI không tin cậy",
+    "$env:GITHUB_EVENT_PATH": "đầu vào CI không tin cậy",
+    "$Request": "request HTTP",
+}
+
+_PERL_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("eval",),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        "FSB-EXEC-002",
+        SINK_EVAL,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("system", "exec", "qx", "readpipe"),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        "FSB-CMD-003",
+        SINK_SHELL_COMMAND,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        # `open(FH, $cmd)` hai đối số là câu lệnh shell nếu chuỗi kết thúc
+        # bằng ống dẫn -- một trong những lỗ hổng Perl lâu đời nhất còn sống.
+        ("open",),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        None,
+        "open() hai đối số ( chạy shell khi chuỗi có ống dẫn )",
+        argument_index=1,
+    ),
+    GenericSink(
+        ("do", "require"),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        "FSB-IMPORT-002",
+        "việc nạp tệp mã",
+    ),
+    GenericSink(
+        ("prepare", "selectall_arrayref", "selectrow_array", "selectcol_arrayref"),
+        Category.SQL,
+        "FSB-SQL-001",
+        "FSB-SQL-002",
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+    GenericSink(
+        ("Storable.thaw", "thaw", "Data.Dumper.Eval"),
+        Category.DESERIALIZATION,
+        "FSB-DESER-001",
+        "FSB-DESER-002",
+        SINK_OBJECT_DESERIALIZER,
+    ),
+)
+
+_PERL_SOURCES: Dict[str, str] = {
+    "@ARGV": COMMAND_LINE_ARG,
+    "$ARGV": COMMAND_LINE_ARG,
+    "%ENV": ENVIRONMENT_VARIABLE,
+    "$ENV": ENVIRONMENT_VARIABLE,
+    "param": REQUEST_PARAM,
+    "$q.param": REQUEST_PARAM,
+    "$cgi.param": REQUEST_PARAM,
+    "url_param": QUERY_PARAM,
+    "http": HTTP_HEADER,
+    "$req.param": REQUEST_PARAM,
+    "STDIN": STANDARD_INPUT,
+}
+
+_LUA_SINKS: Tuple[GenericSink, ...] = (
+    GenericSink(
+        ("load", "loadstring", "dofile", "loadfile", "assert"),
+        Category.CODE_EXECUTION,
+        "FSB-EXEC-001",
+        "FSB-EXEC-002",
+        "bộ nạp mã của Lua",
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("os.execute", "io.popen"),
+        Category.COMMAND,
+        "FSB-CMD-001",
+        "FSB-CMD-003",
+        SINK_SHELL_COMMAND,
+        confidence=Confidence.HIGH,
+    ),
+    GenericSink(
+        ("require",),
+        Category.DYNAMIC_IMPORT,
+        "FSB-IMPORT-001",
+        "FSB-IMPORT-002",
+        SINK_MODULE_LOAD,
+    ),
+    GenericSink(
+        ("io.open", "io.lines", "io.input"),
+        Category.PATH,
+        "FSB-PATH-001",
+        None,
+        SINK_FILE_PATH,
+    ),
+    GenericSink(
+        ("ngx.say", "ngx.print"),
+        Category.MARKUP,
+        "FSB-XSS-001",
+        None,
+        SINK_RAW_HTML,
+    ),
+    GenericSink(
+        ("ngx.redirect",),
+        Category.REDIRECT,
+        "FSB-REDIR-001",
+        None,
+        SINK_REDIRECT,
+    ),
+    GenericSink(
+        ("ngx.location.capture", "http.request"),
+        Category.SSRF,
+        "FSB-SSRF-001",
+        None,
+        SINK_OUTBOUND_URL,
+    ),
+    GenericSink(
+        ("query", "execute"),
+        Category.SQL,
+        "FSB-SQL-001",
+        "FSB-SQL-002",
+        SINK_SQL_QUERY,
+        require_sql=True,
+    ),
+)
+
+_LUA_SOURCES: Dict[str, str] = {
+    "arg": COMMAND_LINE_ARG,
+    "os.getenv": ENVIRONMENT_VARIABLE,
+    "io.read": STANDARD_INPUT,
+    "ngx.var": "biến của request nginx",
+    "ngx.req.get_uri_args": QUERY_PARAM,
+    "ngx.req.get_post_args": FORM_FIELD,
+    "ngx.req.get_headers": HTTP_HEADER,
+    "ngx.req.get_body_data": REQUEST_BODY,
 }
 
 
@@ -694,20 +1199,18 @@ SPECS: Dict[str, LanguageSpec] = {
                 "dangerouslySetInnerHTML",
             ),
         },
-        sanitizers=frozenset(
-            {
-                "encodeURIComponent",
-                "encodeURI",
-                "parseInt",
-                "parseFloat",
-                "Number",
-                "DOMPurify.sanitize",
-                "sanitizeHtml",
-                "validator.escape",
-                "shellQuote.quote",
-                "escapeHtml",
-            }
-        ),
+        sanitizers={
+            "encodeURIComponent": _URI_COMPONENT,
+            "encodeURI": _URI_COMPONENT,
+            "parseInt": _ALL_CATEGORIES,
+            "parseFloat": _ALL_CATEGORIES,
+            "Number": _ALL_CATEGORIES,
+            "DOMPurify.sanitize": _HTML_ONLY,
+            "sanitizeHtml": _HTML_ONLY,
+            "validator.escape": _HTML_ONLY,
+            "shellQuote.quote": _COMMAND_ONLY,
+            "escapeHtml": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "let", "const"}),
     ),
     TYPESCRIPT: LanguageSpec(
@@ -724,40 +1227,42 @@ SPECS: Dict[str, LanguageSpec] = {
                 "dangerouslySetInnerHTML",
             ),
         },
-        sanitizers=frozenset(
-            {
-                "encodeURIComponent",
-                "encodeURI",
-                "parseInt",
-                "parseFloat",
-                "Number",
-                "DOMPurify.sanitize",
-                "sanitizeHtml",
-                "escapeHtml",
-            }
-        ),
+        sanitizers={
+            "encodeURIComponent": _URI_COMPONENT,
+            "encodeURI": _URI_COMPONENT,
+            "parseInt": _ALL_CATEGORIES,
+            "parseFloat": _ALL_CATEGORIES,
+            "Number": _ALL_CATEGORIES,
+            "DOMPurify.sanitize": _HTML_ONLY,
+            "sanitizeHtml": _HTML_ONLY,
+            "escapeHtml": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "let", "const"}),
+        annotation_separator=":",
     ),
     PHP: LanguageSpec(
         language=PHP,
         lexer=_PHP_LEXER,
         sources=_PHP_SOURCES,
         sinks=_PHP_SINKS,
-        sanitizers=frozenset(
-            {
-                "escapeshellarg",
-                "escapeshellcmd",
-                "intval",
-                "floatval",
-                "htmlspecialchars",
-                "htmlentities",
-                "preg_quote",
-                "filter_var",
-                "basename",
-                "urlencode",
-                "rawurlencode",
-            }
-        ),
+        sanitizers={
+            "escapeshellarg": _COMMAND_ONLY,
+            "escapeshellcmd": _COMMAND_ONLY,
+            "intval": _ALL_CATEGORIES,
+            "floatval": _ALL_CATEGORIES,
+            "htmlspecialchars": _HTML_ONLY,
+            "htmlentities": _HTML_ONLY,
+            "preg_quote": _NOTHING,
+            # filter_var() khử tới đâu là do đối số bộ lọc quyết định, mà đối
+            # số đó ở đây chưa đọc được. Giữ nguyên mức cũ để không đổi hành vi
+            # ngoài phạm vi lỗ hổng đang vá.
+            "filter_var": _ALL_CATEGORIES,
+            "basename": _PATH_ONLY,
+            # urlencode/rawurlencode mã hoá cả dấu nháy đơn, khác
+            # encodeURIComponent của JavaScript.
+            "urlencode": _ALL_CATEGORIES,
+            "rawurlencode": _ALL_CATEGORIES,
+        },
         weak_sanitizers=frozenset(
             {"addslashes", "mysql_real_escape_string", "mysqli_real_escape_string", "quote"}
         ),
@@ -772,17 +1277,15 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_JAVA_LEXER,
         sources=_JAVA_SOURCES,
         sinks=_JAVA_SINKS,
-        sanitizers=frozenset(
-            {
-                "Integer.parseInt",
-                "Long.parseLong",
-                "Double.parseDouble",
-                "UUID.fromString",
-                "Encode.forHtml",
-                "StringEscapeUtils.escapeHtml4",
-                "ESAPI.encoder",
-            }
-        ),
+        sanitizers={
+            "Integer.parseInt": _ALL_CATEGORIES,
+            "Long.parseLong": _ALL_CATEGORIES,
+            "Double.parseDouble": _ALL_CATEGORIES,
+            "UUID.fromString": _ALL_CATEGORIES,
+            "Encode.forHtml": _HTML_ONLY,
+            "StringEscapeUtils.escapeHtml4": _HTML_ONLY,
+            "ESAPI.encoder": _HTML_ONLY,
+        },
         annotation_sources=_JAVA_ANNOTATIONS,
     ),
     RUBY: LanguageSpec(
@@ -790,18 +1293,16 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_RUBY_LEXER,
         sources=_RUBY_SOURCES,
         sinks=_RUBY_SINKS,
-        sanitizers=frozenset(
-            {
-                "Integer",
-                "Float",
-                "to_i",
-                "to_f",
-                "Shellwords.escape",
-                "Shellwords.shellescape",
-                "ERB::Util.html_escape",
-                "CGI.escapeHTML",
-            }
-        ),
+        sanitizers={
+            "Integer": _ALL_CATEGORIES,
+            "Float": _ALL_CATEGORIES,
+            "to_i": _ALL_CATEGORIES,
+            "to_f": _ALL_CATEGORIES,
+            "Shellwords.escape": _COMMAND_ONLY,
+            "Shellwords.shellescape": _COMMAND_ONLY,
+            "ERB::Util.html_escape": _HTML_ONLY,
+            "CGI.escapeHTML": _HTML_ONLY,
+        },
         backtick_command=True,
     ),
     GO: LanguageSpec(
@@ -809,16 +1310,15 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_GO_LEXER,
         sources=_GO_SOURCES,
         sinks=_GO_SINKS,
-        sanitizers=frozenset(
-            {
-                "strconv.Atoi",
-                "strconv.ParseInt",
-                "strconv.ParseFloat",
-                "html.EscapeString",
-                "url.QueryEscape",
-                "template.HTMLEscapeString",
-            }
-        ),
+        sanitizers={
+            "strconv.Atoi": _ALL_CATEGORIES,
+            "strconv.ParseInt": _ALL_CATEGORIES,
+            "strconv.ParseFloat": _ALL_CATEGORIES,
+            "html.EscapeString": _HTML_ONLY,
+            # url.QueryEscape mã hoá cả dấu nháy đơn.
+            "url.QueryEscape": _ALL_CATEGORIES,
+            "template.HTMLEscapeString": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "const"}),
         assignment_operators=("=", ":=", "+="),
     ),
@@ -827,17 +1327,15 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_CSHARP_LEXER,
         sources=_CSHARP_SOURCES,
         sinks=_CSHARP_SINKS,
-        sanitizers=frozenset(
-            {
-                "int.Parse",
-                "Int32.Parse",
-                "Int64.Parse",
-                "Convert.ToInt32",
-                "Guid.Parse",
-                "HttpUtility.HtmlEncode",
-                "AntiXss.HtmlEncode",
-            }
-        ),
+        sanitizers={
+            "int.Parse": _ALL_CATEGORIES,
+            "Int32.Parse": _ALL_CATEGORIES,
+            "Int64.Parse": _ALL_CATEGORIES,
+            "Convert.ToInt32": _ALL_CATEGORIES,
+            "Guid.Parse": _ALL_CATEGORIES,
+            "HttpUtility.HtmlEncode": _HTML_ONLY,
+            "AntiXss.HtmlEncode": _HTML_ONLY,
+        },
         declaration_keywords=frozenset({"var", "string", "int", "object"}),
     ),
     SHELL: LanguageSpec(
@@ -845,8 +1343,100 @@ SPECS: Dict[str, LanguageSpec] = {
         lexer=_SHELL_LEXER,
         sources=_SHELL_SOURCES,
         sinks=_SHELL_SINKS,
-        sanitizers=frozenset({"printf"}),
+        sanitizers={"printf": _COMMAND_ONLY},
         backtick_command=True,
+    ),
+    RUST: LanguageSpec(
+        language=RUST,
+        lexer=_RUST_LEXER,
+        sources=_RUST_SOURCES,
+        sinks=_RUST_SINKS,
+        sanitizers={
+            # parse::<T>() trả về Result nên phần khử độc chỉ có thật khi kết
+            # quả được mở ra; giữ ở mức khử sạch vì con số qua được parse
+            # không còn ký tự đặc biệt nào của bất kỳ nhóm nào.
+            "parse": _ALL_CATEGORIES,
+            "from_str_radix": _ALL_CATEGORIES,
+            "Uuid.parse_str": _ALL_CATEGORIES,
+            "shell_escape.escape": _COMMAND_ONLY,
+            "html_escape.encode_safe": _HTML_ONLY,
+            "askama_escape.escape": _HTML_ONLY,
+            "urlencoding.encode": _ALL_CATEGORIES,
+        },
+        declaration_keywords=frozenset({"let", "const", "static"}),
+        chain_separators=(".", "::"),
+        annotation_separator=":",
+        assignment_operators=("=", "+="),
+    ),
+    POWERSHELL: LanguageSpec(
+        language=POWERSHELL,
+        lexer=_POWERSHELL_LEXER,
+        sources=_POWERSHELL_SOURCES,
+        sinks=_POWERSHELL_SINKS,
+        sanitizers={
+            "int": _ALL_CATEGORIES,
+            "long": _ALL_CATEGORIES,
+            "guid": _ALL_CATEGORIES,
+            "System.Web.HttpUtility.HtmlEncode": _HTML_ONLY,
+            "System.Web.HttpUtility.UrlEncode": _ALL_CATEGORIES,
+        },
+        chain_separators=(".", "::"),
+        cast_delimiters=("[", "]"),
+        # PowerShell gọi cmdlet KHÔNG có dấu ngoặc: `Invoke-Expression $x`.
+        # Thiếu bảng này thì mọi sink của ngôn ngữ chỉ khớp ở dạng viết bằng
+        # cú pháp .NET, tức là gần như không bao giờ khớp.
+        bare_call_names=frozenset(
+            {
+                "Invoke-Expression",
+                "iex",
+                "IEX",
+                "Invoke-Command",
+                "Add-Type",
+                "Start-Process",
+                "Start-Job",
+                "Invoke-Item",
+                "Import-Module",
+                "Invoke-WebRequest",
+                "Invoke-RestMethod",
+                "Invoke-Sqlcmd",
+                "Get-Content",
+                "Set-Content",
+                "Out-File",
+                "Remove-Item",
+            }
+        ),
+    ),
+    PERL: LanguageSpec(
+        language=PERL,
+        lexer=_PERL_LEXER,
+        sources=_PERL_SOURCES,
+        sinks=_PERL_SINKS,
+        sanitizers={
+            "int": _ALL_CATEGORIES,
+            "uri_escape": _ALL_CATEGORIES,
+            "encode_entities": _HTML_ONLY,
+            "String.ShellQuote.shell_quote": _COMMAND_ONLY,
+            "shell_quote": _COMMAND_ONLY,
+            # quotemeta() thoát ký tự đặc biệt của REGEX. Dấu chấm phẩy, ống
+            # dẫn và dấu nháy đơn không nằm trong tập đó, nên nó không cứu
+            # được sink nào ở đây -- cùng lý do với preg_quote() của PHP.
+            "quotemeta": _NOTHING,
+        },
+        declaration_keywords=frozenset({"my", "our", "local"}),
+        chain_separators=("->", "::"),
+        backtick_command=True,
+    ),
+    LUA: LanguageSpec(
+        language=LUA,
+        lexer=_LUA_LEXER,
+        sources=_LUA_SOURCES,
+        sinks=_LUA_SINKS,
+        sanitizers={
+            "tonumber": _ALL_CATEGORIES,
+            "ngx.escape_uri": _ALL_CATEGORIES,
+            "ngx.quote_sql_str": frozenset({Category.SQL}),
+        },
+        declaration_keywords=frozenset({"local"}),
     ),
 }
 

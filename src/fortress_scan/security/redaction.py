@@ -23,14 +23,28 @@ _PATTERNS: Tuple[Pattern[str], ...] = (
         r"(?i)\b(?:pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key)\b\s*[:=]\s*"
         r"([^\s'\";,)\]}]{8,120})"
     ),
-    re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s/@]+:([^\s/@]{3,120})@"),
+    # Tên giao thức có chặn trên, và đó không phải chuyện thẩm mỹ. Bản cũ viết
+    # `[a-z][a-z0-9+.\-]*://`, mà lớp ký tự đó nuốt được chữ, số và dấu chấm
+    # còn `:` thì không, nên trên chuỗi dài không có `://` bộ máy quét tới cuối
+    # rồi lùi từng ký tự, lặp lại ở mọi vị trí bắt đầu. Đo được 3,0 giây cho
+    # 32 KB, và redact() chạy trên từng dòng của mọi phát hiện.
+    #
+    # Tên giao thức dài nhất IANA từng đăng ký chưa tới 30 ký tự, nên chặn ở 30
+    # không bỏ sót gì mà biến phép quay lui thành hằng số.
+    re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,30}://[^\s/@]+:([^\s/@]{3,120})@"),
 )
+
+# Chặn trên cho MỘT lần gọi redact(). Đây là lưới an toàn thứ hai, độc lập với
+# việc từng mẫu có tuyến tính hay không: mọi thứ redact() trả về đều bị
+# make_snippet() cắt còn vài trăm ký tự, nên soi quá mức này không thêm được
+# một ký tự nào vào báo cáo -- chỉ thêm thời gian cho một dòng dài bất thường.
+MAX_REDACT_LENGTH = 8192
 
 
 def redact(text: str) -> str:
     if not text:
         return ""
-    result = text
+    result = text[:MAX_REDACT_LENGTH]
     for pattern in _PATTERNS:
         result = _apply(pattern, result)
     return result

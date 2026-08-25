@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from dataclasses import dataclass, replace
+from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from ...core.budget import Budget, BudgetExceeded
-from ...core.model import Confidence, Finding, StepKind
+from ...core.model import Category, Confidence, Finding, StepKind
+from ...core.registry import get_rule
 from ..base import Analyzer, AnalysisUnit, FindingBuilder
-from ..python.specs import SQL_STATEMENT
+from ..python.specs import looks_like_sql
 from .lexer import IDENT, NEWLINE, OP, STRING, Token, tokenize
 from .profiles import GenericSink, LanguageSpec, spec_for
 
@@ -17,6 +18,16 @@ _CONTINUATION_OPERATORS = frozenset(
 )
 _STATEMENT_BREAKS = frozenset({";", "{", "}"})
 _SHELL_QUIET_COMMANDS = frozenset({"echo", "printf", "return", "local", "export", "declare"})
+_EVERY_CATEGORY: FrozenSet[Category] = frozenset(Category)
+
+# Từ khoá khai báo hàm của các ngôn ngữ ở đây. Dùng để nhận ra tệp được quét tự
+# định nghĩa một cái tên trùng với bộ khử độc trong bảng.
+_FUNCTION_KEYWORDS = frozenset({"function", "func", "def", "sub", "fn"})
+
+# `const escapeHtml = require("escape-html")` là nạp thư viện thật, không phải
+# chiếm tên. Trong JavaScript thì require/import mới là phép nhập, còn dấu `=`
+# chỉ là cú pháp -- nên phải nhìn vế phải mới phân biệt được hai chuyện.
+_IMPORT_CALLS = frozenset({"require", "import", "await"})
 
 
 @dataclass(frozen=True)
@@ -24,6 +35,15 @@ class TaintMark:
     label: str
     line: int
     confidence: Confidence = Confidence.MEDIUM
+    # Những nhóm đã thật sự được khử trên đường đi tới đây. Đi kèm giá trị chứ
+    # không quyết định ngay tại chỗ gặp bộ khử độc, vì lúc gán thì chưa biết
+    # giá trị này rồi sẽ chảy vào sink thuộc nhóm nào:
+    #     $safe = htmlspecialchars($_GET['d']);   // khử MARKUP
+    #     system("ls " . $safe);                  // sink COMMAND -> vẫn thủng
+    cleared: FrozenSet[Category] = frozenset()
+
+    def active_for(self, category: Category) -> bool:
+        return category not in self.cleared
 
 
 class GenericAnalyzer(Analyzer):
@@ -48,8 +68,10 @@ class _Analysis:
         self.builder = FindingBuilder(unit)
         self.tainted: Dict[str, TaintMark] = {}
         self.sanitized: Set[str] = set()
+        self.declared: Set[str] = set()
 
     def run(self, tokens: Sequence[Token]) -> List[Finding]:
+        self._collect_declarations(tokens)
         self._seed_annotations(tokens)
         statements = _split_statements(tokens)
         for statement in statements[:_MAX_STATEMENTS]:
@@ -58,6 +80,57 @@ class _Analysis:
                 continue
             self._analyze_statement(statement)
         return self.builder.findings
+
+    def _collect_declarations(self, tokens: Sequence[Token]) -> None:
+        """Tên khử độc mà chính tệp này định nghĩa lại.
+
+        Chỉ quan tâm những tên có trong bảng khử độc -- số còn lại không đổi
+        được kết quả, nên không cần dựng bảng ký hiệu đầy đủ cho tám ngôn ngữ.
+        Bắt hai dạng: khai báo hàm (`function escapeHtml`, `func`, `def`...) và
+        gán vào chính cái tên đó (`escapeHtml = s => s`), vì cả hai đều đủ để
+        cướp lấy quyền miễn trừ của bảng.
+
+        Hai thứ KHÔNG phải là chiếm tên, và tính nhầm chúng thì bộ khử độc thật
+        mất tác dụng -- tức là báo bừa đúng vào cách viết đúng nhất:
+
+            const escapeHtml = require("escape-html");  // nạp thư viện THẬT
+            utils.escapeHtml = fn;                      // gán vào thuộc tính
+
+        Đây cũng là ranh giới mà dccc9b8 đã vạch cho phía Python: `import`
+        không ghi vào môi trường, còn phép gán thì có.
+        """
+        limit = len(tokens)
+        for index, token in enumerate(tokens):
+            if token.kind != IDENT or token.in_string:
+                continue
+            if token.text not in self.spec.sanitizers:
+                continue
+            previous = tokens[index - 1] if index else None
+            if previous is not None and previous.kind == OP:
+                if previous.text in self.spec.chain_separators:
+                    # `utils.escapeHtml` -- thuộc tính, không phải tên trần.
+                    continue
+            if (
+                previous is not None
+                and previous.kind == IDENT
+                and previous.text in _FUNCTION_KEYWORDS
+            ):
+                self.declared.add(token.text)
+                continue
+            following = tokens[index + 1] if index + 1 < limit else None
+            if (
+                following is not None
+                and following.kind == OP
+                and following.text in self.spec.assignment_operators
+            ):
+                initializer = tokens[index + 2] if index + 2 < limit else None
+                if (
+                    initializer is not None
+                    and initializer.kind == IDENT
+                    and initializer.text in _IMPORT_CALLS
+                ):
+                    continue
+                self.declared.add(token.text)
 
     def _seed_annotations(self, tokens: Sequence[Token]) -> None:
         if not self.spec.annotation_sources:
@@ -134,21 +207,30 @@ class _Analysis:
                 and statement[next_index].kind == OP
                 and statement[next_index].text == "("
             )
+            # Token cuối của chuỗi gọi ( `exec` trong `child_process.exec` ):
+            # dùng làm điểm cuối của vùng báo lỗi để SARIF tô đúng lời gọi.
+            chain_end = statement[next_index - 1] if next_index > index else statement[index]
             if opens_call:
                 arguments, _ = _read_arguments(statement, next_index)
-                self._check_call(chain, statement[index], arguments)
+                self._check_call(chain, statement[index], arguments, chain_end)
             elif chain in self.spec.bare_call_names:
-                self._check_call(chain, statement[index], [list(statement[next_index:])])
+                self._check_call(
+                    chain, statement[index], [list(statement[next_index:])], chain_end
+                )
             index = max(next_index, index + 1)
 
     def _check_call(
-        self, chain: str, anchor: Token, arguments: Sequence[Sequence[Token]]
+        self,
+        chain: str,
+        anchor: Token,
+        arguments: Sequence[Sequence[Token]],
+        anchor_end: Optional[Token] = None,
     ) -> None:
         sink = _match_sink(chain, self.spec)
         if sink is None:
             return
         if sink.require_sql:
-            selected = _select_sql_argument(arguments, sink, chain)
+            selected = _select_sql_argument(arguments, sink, chain, self.budget.spend)
         elif sink.program_position:
             wrapped = _shell_wrapper_argument(arguments)
             if wrapped is not None:
@@ -160,6 +242,7 @@ class _Analysis:
                     tokens=wrapped,
                     mark=self._taint_of(wrapped),
                     anchor=anchor,
+                    anchor_end=anchor_end,
                     confidence=Confidence.HIGH,
                 )
                 return
@@ -178,6 +261,7 @@ class _Analysis:
             tokens=selected,
             mark=mark,
             anchor=anchor,
+            anchor_end=anchor_end,
             confidence=sink.confidence,
         )
 
@@ -249,6 +333,8 @@ class _Analysis:
                 symbol=token.text,
                 message="%s được khai triển không có nháy kép trong câu lệnh; hãy viết \"%s\""
                 % (mark.label, token.text),
+                end_line=token.line,
+                end_column=token.column + len(token.text),
                 trace=(
                     self.builder.step(StepKind.SOURCE, mark.line, 0, mark.label),
                     self.builder.step(
@@ -267,9 +353,21 @@ class _Analysis:
         mark: Optional[TaintMark],
         anchor: Optional[Token] = None,
         confidence: Confidence = Confidence.MEDIUM,
+        anchor_end: Optional[Token] = None,
     ) -> None:
         target = anchor or (tokens[0] if tokens else None)
         if target is None:
+            return
+        end_line, end_column = _region_end(target, anchor_end)
+        # Bộ khử độc đã chạy trên đường đi chỉ có giá trị cho ĐÚNG nhóm của nó.
+        # htmlspecialchars() rồi đem vào system() thì vết nhiễm vẫn còn sống,
+        # nên chỗ này hỏi lại theo nhóm của chính rule sắp báo.
+        #
+        # Khử đúng nhóm thì im hẳn, không rơi xuống rule "giá trị không phải
+        # hằng" bên dưới: đã có người khử đúng chỗ rồi thì nhắc nữa là báo bừa.
+        # Đây chính là điều kiện _is_neutralized() ở nhánh dưới vẫn luôn kiểm,
+        # chỉ là nói được chính xác theo từng nhóm.
+        if mark is not None and not mark.active_for(_category_of(rule_id)):
             return
         if mark is not None:
             self.builder.add(
@@ -278,6 +376,8 @@ class _Analysis:
                 column=target.column,
                 symbol=symbol,
                 message="%s chạy tới %s mà chưa được vô hiệu hóa" % (mark.label, description),
+                end_line=end_line,
+                end_column=end_column,
                 confidence=min(confidence, mark.confidence),
                 trace=(
                     self.builder.step(StepKind.SOURCE, mark.line, 0, "%s đi vào từ đây" % mark.label),
@@ -295,12 +395,20 @@ class _Analysis:
             column=target.column,
             symbol=symbol,
             message="%s nhận một giá trị không phải hằng" % description,
+            end_line=end_line,
+            end_column=end_column,
             trace=(
                 self.builder.step(StepKind.SINK, target.line, target.column, description),
             ),
         )
 
     def _taint_of(self, tokens: Sequence[Token]) -> Optional[TaintMark]:
+        """Vết nhiễm còn sống trong biểu thức này, kèm những nhóm đã được khử.
+
+        Một nhóm chỉ coi là an toàn khi MỌI vết nhiễm trong biểu thức đều đã
+        được khử cho nhóm đó -- nên phần `cleared` trả về là phần giao. Chỉ cần
+        một toán hạng chưa được khử là cả biểu thức vẫn thủng ở nhóm ấy.
+        """
         hits: List[Tuple[int, TaintMark]] = []
         index = 0
         limit = len(tokens)
@@ -309,17 +417,57 @@ class _Analysis:
             if chain is None:
                 index += 1
                 continue
-            mark = self.tainted.get(chain) or self._source_mark(chain, tokens[index].line)
+            mark = self._mark_for(chain, tokens[index].line)
             if mark is not None:
                 hits.append((index, mark))
             index = max(next_index, index + 1)
         if not hits:
             return None
-        protected = _sanitizer_ranges(tokens, self.spec)
+
+        protected = _sanitizer_ranges(tokens, self.spec, self.declared)
+        surviving: Optional[TaintMark] = None
+        cleared: Optional[FrozenSet[Category]] = None
         for position, mark in hits:
-            if not any(start <= position < end for start, end in protected):
+            here = mark.cleared
+            for start, end, categories in protected:
+                if start <= position < end:
+                    here = here | categories
+            cleared = here if cleared is None else (cleared & here)
+            if surviving is None and here != _EVERY_CATEGORY:
+                surviving = mark
+        if surviving is None or cleared is None or cleared == _EVERY_CATEGORY:
+            return None
+        return replace(surviving, cleared=cleared)
+
+    def _mark_for(self, chain: str, line: int) -> Optional[TaintMark]:
+        """Vết nhiễm của một chuỗi truy cập, kể cả khi nó đi qua thuộc tính.
+
+        `args` bẩn thì `args.host` cũng bẩn: đọc một trường ra khỏi giá trị bẩn
+        không rửa sạch nó. Trước đây chỉ tên ĐẦY ĐỦ mới được tra, nên đúng cách
+        viết phổ biến nhất của mọi framework -- gom tham số vào một biến rồi
+        lấy từng trường -- rơi thẳng qua lưới:
+
+            local args = ngx.req.get_uri_args()
+            os.execute("ping " .. args.host)      -- không thấy vết nhiễm nào
+
+        Phép tra theo tiền tố này đã có sẵn cho bảng nguồn ( vì `req.query.x`
+        phải khớp `req.query` ), chỗ thiếu chỉ là bảng biến bẩn.
+        """
+        mark = self.tainted.get(chain)
+        if mark is not None:
+            return mark
+        # Một trường được gán lại bằng giá trị đã khử độc thì nó sạch, kể cả
+        # khi cái gốc chứa nó vẫn bẩn: `args.host = tonumber(args.host)` phải
+        # thắng phép tra theo tiền tố, nếu không thì cách sửa đúng cũng bị báo.
+        if chain in self.sanitized:
+            return None
+        prefix = chain
+        while "." in prefix:
+            prefix = prefix.rsplit(".", 1)[0]
+            mark = self.tainted.get(prefix)
+            if mark is not None:
                 return mark
-        return None
+        return self._source_mark(chain, line)
 
     def _source_mark(self, chain: str, line: int) -> Optional[TaintMark]:
         label = self.spec.sources.get(chain)
@@ -334,8 +482,10 @@ class _Analysis:
         return None
 
     def _is_sanitized(self, tokens: Sequence[Token]) -> bool:
+        # Cùng lý do với _sanitizer_ranges: một cái tên do chính tệp này định
+        # nghĩa thì không được hưởng quyền miễn trừ của bảng.
         for chain in self._chains(tokens):
-            if chain in self.spec.sanitizers:
+            if chain in self.spec.sanitizers and chain not in self.declared:
                 return True
         return False
 
@@ -357,6 +507,10 @@ class _Analysis:
                 found.append(chain)
             index = max(next_index if chain else index + 1, index + 1)
         return found
+
+
+def _category_of(rule_id: str) -> Category:
+    return get_rule(rule_id).category
 
 
 def _split_statements(tokens: Sequence[Token]) -> List[List[Token]]:
@@ -407,7 +561,34 @@ def _assignment_position(statement: Sequence[Token], spec: LanguageSpec) -> Opti
     return None
 
 
+def _strip_type_annotation(left: Sequence[Token], spec: LanguageSpec) -> Sequence[Token]:
+    """Drop ``: T`` from ``const x: T = ...`` so the target stays ``x``.
+
+    Only the first separator at bracket depth zero counts; a colon inside an
+    object literal, a generic argument or an index type belongs to the type, not
+    to the declaration.
+    """
+    separator = spec.annotation_separator
+    if separator is None:
+        return left
+    depth = 0
+    for index, token in enumerate(left):
+        if token.kind != OP or token.in_string:
+            continue
+        if token.text in "([{":
+            depth += 1
+        elif token.text in ")]}":
+            depth = max(0, depth - 1)
+        elif depth == 0 and token.text == separator:
+            trimmed = list(left[:index])
+            while trimmed and trimmed[-1].kind == OP and trimmed[-1].text == "?":
+                trimmed.pop()
+            return trimmed
+    return left
+
+
 def _assignment_target(left: Sequence[Token], spec: LanguageSpec) -> Optional[str]:
+    left = _strip_type_annotation(left, spec)
     filtered = [token for token in left if token.kind in (IDENT, OP)]
     if not filtered:
         return None
@@ -545,12 +726,37 @@ _ALWAYS_SQL = frozenset(
 )
 
 
+def _region_end(
+    anchor: Token, anchor_end: Optional[Token]
+) -> Tuple[Optional[int], Optional[int]]:
+    """Điểm cuối của vùng báo lỗi, hoặc (None, None) nếu không chắc chắn.
+
+    Chỉ nhận token IDENT đọc thẳng từ nguồn: với STRING thì `text` là phần
+    thân đã bỏ nháy nên `column + len(text)` không còn là vị trí thật, còn
+    token nội suy mang vị trí của cả chuỗi bọc ngoài. Thà để vùng rộng một ký
+    tự như trước còn hơn tô sai đoạn mã.
+    """
+    candidate = anchor_end if anchor_end is not None else anchor
+    if candidate.kind != IDENT or candidate.in_string or candidate.interpolated:
+        candidate = anchor
+    if candidate.kind != IDENT or candidate.in_string or candidate.interpolated:
+        return None, None
+    if candidate.line < anchor.line:
+        return None, None
+    if candidate.line == anchor.line and candidate.column < anchor.column:
+        return None, None
+    return candidate.line, candidate.column + len(candidate.text)
+
+
 def _select_sql_argument(
-    arguments: Sequence[Sequence[Token]], sink: GenericSink, chain: str
+    arguments: Sequence[Sequence[Token]],
+    sink: GenericSink,
+    chain: str,
+    spend: Optional[Callable[[int], None]] = None,
 ) -> Sequence[Token]:
     for argument in arguments:
         text = " ".join(token.text for token in argument if token.kind == STRING)
-        if SQL_STATEMENT.search(text):
+        if looks_like_sql(text, spend):
             return argument
     tail = chain.rsplit(".", 1)[-1]
     if chain in _ALWAYS_SQL or tail in _ALWAYS_SQL:
@@ -573,22 +779,98 @@ def _match_sink(chain: str, spec: LanguageSpec) -> Optional[GenericSink]:
 
 
 def _sanitizer_ranges(
-    tokens: Sequence[Token], spec: LanguageSpec
-) -> List[Tuple[int, int]]:
-    ranges: List[Tuple[int, int]] = []
+    tokens: Sequence[Token], spec: LanguageSpec, declared: Set[str]
+) -> List[Tuple[int, int, FrozenSet[Category]]]:
+    """Khoảng token nằm trong một lời gọi khử độc, kèm nhóm mà nó khử.
+
+    `declared` là những cái tên chính tệp được quét tự định nghĩa. Bảng khử độc
+    tra theo TÊN, nên không loại chúng ra thì bốn dòng dưới đây đủ để tắt một
+    phát hiện critical, và tắt trong im lặng:
+
+        function escapeHtml(s) { return s; }
+        cp.exec("ping " + escapeHtml(req.query.host));
+
+    Đây đúng lập luận đã dùng cho phía Python ở dccc9b8: bỏ sót một cái tên bị
+    che ở phía sink chỉ tốn thêm một phát hiện, còn bỏ sót ở đây thì xoá mất
+    một phát hiện thật.
+    """
+    ranges: List[Tuple[int, int, FrozenSet[Category]]] = []
     index = 0
     limit = len(tokens)
     while index < limit:
+        cast = _cast_range(tokens, index, spec, declared)
+        if cast is not None:
+            ranges.append(cast)
+            index = cast[1]
+            continue
         chain, next_index = _read_chain(tokens, index, spec)
-        if chain is not None and chain in spec.sanitizers:
+        categories = spec.sanitizers.get(chain) if chain is not None else None
+        if categories is not None and chain not in declared:
             if next_index < limit and tokens[next_index].kind == OP:
                 if tokens[next_index].text == "(":
                     _, after = _read_arguments(tokens, next_index)
-                    ranges.append((index, after))
+                    ranges.append((index, after, categories))
                     index = after
                     continue
         index = max(next_index if chain else index + 1, index + 1)
     return ranges
+
+
+def _cast_range(
+    tokens: Sequence[Token], index: int, spec: LanguageSpec, declared: Set[str]
+) -> Optional[Tuple[int, int, FrozenSet[Category]]]:
+    """Phạm vi của một phép ép kiểu tiền tố, ví dụ `[int]$args[0]`.
+
+    Phép ép kiểu bám vào ĐÚNG biểu thức đứng ngay sau nó, nên phạm vi dừng
+    ngay sau chuỗi truy cập kế tiếp cùng các nhóm ngoặc bám theo. Kéo dài tới
+    hết câu lệnh là sai theo hướng nguy hiểm: trong `[int]$a + $b`, phép ép
+    kiểu không hề đụng tới `$b`.
+    """
+    delimiters = spec.cast_delimiters
+    if not delimiters or index + 3 >= len(tokens):
+        return None
+    opening, closing = delimiters
+    if tokens[index].kind != OP or tokens[index].text != opening:
+        return None
+    name, after_name = _read_chain(tokens, index + 1, spec)
+    if name is None or after_name >= len(tokens):
+        return None
+    if tokens[after_name].kind != OP or tokens[after_name].text != closing:
+        return None
+    categories = spec.sanitizers.get(name)
+    if categories is None or name in declared:
+        return None
+    return (after_name + 1, _postfix_end(tokens, after_name + 1, spec), categories)
+
+
+def _postfix_end(tokens: Sequence[Token], start: int, spec: LanguageSpec) -> int:
+    """Vị trí ngay sau biểu thức bắt đầu tại `start`, tính cả `[...]` và `(...)`."""
+    chain, cursor = _read_chain(tokens, start, spec)
+    if chain is None:
+        cursor = start + 1
+    limit = len(tokens)
+    while cursor < limit and tokens[cursor].kind == OP and tokens[cursor].text in "([{":
+        after = _group_end(tokens, cursor)
+        if after is None:
+            break
+        cursor = after
+    return cursor
+
+
+def _group_end(tokens: Sequence[Token], opening: int) -> Optional[int]:
+    """Vị trí ngay sau nhóm ngoặc mở tại `opening`; None nếu nó không đóng."""
+    depth = 0
+    for cursor in range(opening, len(tokens)):
+        token = tokens[cursor]
+        if token.kind != OP or token.in_string:
+            continue
+        if token.text in "([{":
+            depth += 1
+        elif token.text in ")]}":
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+    return None
 
 
 def _is_literal(tokens: Sequence[Token]) -> bool:

@@ -36,6 +36,9 @@ class LexerProfile:
     dollar_interpolation: bool = False
     identifier_extra: str = "_$"
     heredoc_markers: Tuple[str, ...] = ()
+    # Nhãn heredoc TRẦN phải dính liền dấu mở. Đúng với Perl và PHP; shell thì
+    # `cat << EOF` có khoảng trắng vẫn là heredoc thật, nên cờ này tắt ở đó.
+    heredoc_bare_adjacent: bool = False
     escape_character: str = "\\"
     raw_quotes: Tuple[str, ...] = ()
     multichar_operators: Tuple[str, ...] = (
@@ -82,7 +85,12 @@ class Tokenizer:
         self._length = len(source)
         self._index = 0
         self._line = 1
-        self._column = 1
+        # Cột đếm từ 0, ĐÚNG như ast.col_offset của bộ phân tích Python. Cả
+        # đường ra phía sau ( console, JSON, SARIF startColumn = column + 1 )
+        # đều giả định 0-based; đếm từ 1 ở đây khiến MỌI phát hiện của mọi ngôn
+        # ngữ dùng lexer này lệch một cột, và trên GitHub code scanning là tô
+        # sai một ký tự so với lời gọi thật.
+        self._column = 0
         self._tokens: List[Token] = []
 
     def run(self) -> List[Token]:
@@ -93,7 +101,7 @@ class Tokenizer:
                 self._emit(NEWLINE, "\n")
                 self._advance(1)
                 self._line += 1
-                self._column = 1
+                self._column = 0
                 continue
             if char in " \t\r\f\v":
                 self._advance(1)
@@ -129,6 +137,22 @@ class Tokenizer:
         self._index += count
         self._column += count
 
+    def _advance_over(self, segment: str) -> None:
+        """Đi hết một đoạn đã đọc nguyên khối ( chuỗi, heredoc, chú thích khối ).
+
+        Các đoạn này trước đây đặt thẳng column về đầu dòng. Đúng khi đoạn có
+        xuống dòng, nhưng SAI hẳn khi nó nằm gọn trong một dòng: sau
+        `$log = "prefix"; system($x)` thì `system` bị báo ở cột 2 thay vì 17 -
+        mọi token đứng sau một chuỗi trên cùng dòng đều lệch, và đó là hình
+        dạng phổ biến nhất của mã thật.
+        """
+        newlines = segment.count("\n")
+        if newlines:
+            self._line += newlines
+            self._column = len(segment) - segment.rfind("\n") - 1
+        else:
+            self._column += len(segment)
+
     def _skip_comment(self) -> bool:
         for marker in self._profile.line_comments:
             if self._source.startswith(marker, self._index):
@@ -143,9 +167,8 @@ class Tokenizer:
                 end = self._source.find(closer, self._index + len(opener))
                 segment_end = self._length if end == -1 else end + len(closer)
                 segment = self._source[self._index : segment_end]
-                self._line += segment.count("\n")
                 self._index = segment_end
-                self._column = 1
+                self._advance_over(segment)
                 return True
         return False
 
@@ -154,7 +177,9 @@ class Tokenizer:
             if not self._source.startswith(marker, self._index):
                 continue
             cursor = self._index + len(marker)
+            padded = False
             while cursor < self._length and self._source[cursor] in " \t~-":
+                padded = True
                 cursor += 1
             quote = ""
             if cursor < self._length and self._source[cursor] in "\"'":
@@ -166,7 +191,7 @@ class Tokenizer:
             ):
                 cursor += 1
             label = self._source[start:cursor]
-            if not label:
+            if not self._is_heredoc_label(label, quote, padded):
                 return False
             if quote and cursor < self._length and self._source[cursor] == quote:
                 cursor += 1
@@ -180,11 +205,28 @@ class Tokenizer:
             self._emit(STRING, body, in_string=False)
             if quote != "'":
                 self._scan_interpolations(body)
-            self._line += segment.count("\n")
             self._index = terminator
-            self._column = 1
+            self._advance_over(segment)
             return True
         return False
+
+    def _is_heredoc_label(self, label: str, quote: str, padded: bool) -> bool:
+        """Chuỗi vừa đọc có đúng là nhãn heredoc không.
+
+        `<<` còn là toán tử dịch trái, và nhận nhầm nó là mở heredoc thì phần
+        còn lại của TỆP bị nuốt vào một chuỗi không bao giờ đóng. Mọi phát hiện
+        phía sau biến mất, không lỗi, không dấu vết. Một dòng `my $mask = 1 << 8;`
+        là đủ để làm điều đó với cả tệp Perl.
+
+        Hai luật, và cả hai đều lấy từ chính cú pháp của các ngôn ngữ này:
+        nhãn là một định danh nên không mở đầu bằng chữ số; và ở Perl nhãn
+        trần phải dính liền `<<`, có khoảng trắng là phép dịch trái.
+        """
+        if not label or label[0].isdigit():
+            return False
+        if padded and not quote and self._profile.heredoc_bare_adjacent:
+            return False
+        return True
 
     def _find_heredoc_end(self, label: str, start: int) -> int:
         cursor = start
@@ -213,6 +255,17 @@ class Tokenizer:
                 pieces.append(self._source[cursor + 1])
                 cursor += 2
                 continue
+            if interpolating and not raw:
+                # Vùng nội suy là mã, nên nó có thể chứa một chuỗi lồng dùng
+                # đúng dấu nháy đang mở: `outer ${`inner`} end`. Nhảy qua trọn
+                # vùng đó, nếu không thì dấu nháy mở của chuỗi lồng bị hiểu là
+                # dấu đóng của chuỗi ngoài, và phần ruột chuỗi rơi ra ngoài
+                # thành mã.
+                span = self._interpolation_span(cursor)
+                if span != -1:
+                    pieces.append(self._source[cursor:span])
+                    cursor = span
+                    continue
             if current == char:
                 cursor += 1
                 break
@@ -223,10 +276,68 @@ class Tokenizer:
         self._emit(STRING, body, quote=char)
         if interpolating and not raw:
             self._scan_interpolations(body)
-        self._line += segment.count("\n")
         self._index = cursor
-        self._column = 1
+        self._advance_over(segment)
         return True
+
+    def _skip_quoted(self, index: int) -> int:
+        """Bỏ qua một chuỗi lồng nằm bên trong vùng nội suy."""
+        quote = self._source[index]
+        cursor = index + 1
+        escape = self._profile.escape_character
+        while cursor < self._length:
+            char = self._source[cursor]
+            if char == escape and cursor + 1 < self._length:
+                cursor += 2
+                continue
+            if char == quote:
+                return cursor + 1
+            cursor += 1
+        return cursor
+
+    def _interpolation_span(self, index: int) -> int:
+        """Chỉ số ngay sau dấu đóng khớp của vùng nội suy bắt đầu tại index.
+
+        Trả về -1 nếu ở đây không mở vùng nội suy nào, hoặc vùng đó không đóng
+        lại -- khi đó phần còn lại được đọc như thân chuỗi bình thường.
+        """
+        profile = self._profile
+        quotes = (
+            tuple(profile.plain_quotes)
+            + tuple(profile.interpolating_quotes)
+            + tuple(profile.raw_quotes)
+        )
+        for opener, closer in profile.interpolation_markers:
+            if self._source.startswith(opener, index):
+                return self._scan_to_closer(index + len(opener), opener, closer, quotes)
+        return -1
+
+    def _scan_to_closer(
+        self, cursor: int, opener: str, closer: str, quotes: Tuple[str, ...]
+    ) -> int:
+        depth = 1
+        escape = self._profile.escape_character
+        while cursor < self._length:
+            self._budget.spend()
+            char = self._source[cursor]
+            if char == escape and cursor + 1 < self._length:
+                cursor += 2
+                continue
+            if char in quotes:
+                cursor = self._skip_quoted(cursor)
+                continue
+            if self._source.startswith(opener, cursor):
+                depth += 1
+                cursor += len(opener)
+                continue
+            if char == closer:
+                depth -= 1
+                cursor += 1
+                if depth == 0:
+                    return cursor
+                continue
+            cursor += 1
+        return -1
 
     def _scan_interpolations(self, body: str) -> None:
         if self._depth >= _MAX_INTERPOLATION_DEPTH:

@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from .diffscope import ChangedLines
 from .model import Confidence, Severity, parse_confidence, parse_severity
 
 DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -78,8 +79,18 @@ class Config:
     file_timeout_seconds: float = DEFAULT_FILE_SECONDS
     follow_symlinks: bool = False
     honor_inline_suppressions: bool = True
+    respect_ignore_files: bool = True
     respect_vcs_ignore: bool = True
     include_low_signal_sources: bool = False
+    cross_file_analysis: bool = True
+    # Hạ độ tin cậy một nấc cho phát hiện nằm ngoài đường chạy sản phẩm
+    # ( test, ví dụ, mã sinh, mã đi mượn ). Tắt đi khi đang cố tình soi
+    # chính những chỗ đó -- ví dụ khi kiểm tra một bộ fixture chạy trên CI.
+    context_awareness: bool = True
+    # Chỉ báo những phát hiện chạm vào dòng đã thay đổi. Rỗng nghĩa là không
+    # lọc; None-vs-rỗng không phân biệt được ở dataclass frozen nên dùng cờ
+    # riêng để "một patch không đổi dòng nào" khác hẳn "không dùng patch".
+    changed_lines: Optional["ChangedLines"] = None
     jobs: int = 1
 
     def with_overrides(self, **overrides: Any) -> "Config":
@@ -110,8 +121,11 @@ _ALLOWED_KEYS = frozenset(
         "file_timeout_seconds",
         "follow_symlinks",
         "honor_inline_suppressions",
+        "respect_ignore_files",
         "respect_vcs_ignore",
         "include_low_signal_sources",
+        "cross_file_analysis",
+        "context_awareness",
         "jobs",
     )
 )
@@ -131,8 +145,11 @@ _BOOL_KEYS = frozenset(
     (
         "follow_symlinks",
         "honor_inline_suppressions",
+        "respect_ignore_files",
         "respect_vcs_ignore",
         "include_low_signal_sources",
+        "cross_file_analysis",
+        "context_awareness",
     )
 )
 
@@ -146,7 +163,47 @@ _LIST_KEYS = frozenset(
     )
 )
 
-_MAX_CONFIG_BYTES = 256 * 1024
+MAX_CONFIG_BYTES = 256 * 1024
+
+# Những khóa này thu hẹp thứ được quét hoặc được báo. Tệp cấu hình nằm trong
+# chính cây thư mục bị quét là dữ liệu không tin cậy khi ta quét mã của người
+# khác -- một báo cáo "sạch" do nó tạo ra phải nói rõ vì sao mình sạch.
+_COVERAGE_KEYS: Tuple[Tuple[str, str], ...] = (
+    ("disabled_rules", "tắt rule"),
+    ("enabled_rules", "chỉ bật một tập rule"),
+    ("exclude", "loại trừ đường dẫn"),
+    ("include", "chỉ quét một tập đường dẫn"),
+    ("excluded_directories", "loại trừ thư mục"),
+    ("min_severity", "bỏ qua phát hiện dưới mức"),
+    ("min_confidence", "bỏ qua phát hiện dưới độ tin cậy"),
+    ("fail_on", "đổi ngưỡng thoát khác 0"),
+    ("max_file_bytes", "giới hạn kích thước tệp"),
+    ("max_files", "giới hạn số tệp"),
+    ("max_total_bytes", "giới hạn tổng dung lượng"),
+    ("node_budget", "giới hạn ngân sách phân tích"),
+    ("token_budget", "giới hạn ngân sách phân tích"),
+    ("cross_file_analysis", "tắt phân tích xuyên file"),
+    ("context_awareness", "đổi cách hiệu chỉnh độ tin cậy theo ngữ cảnh tệp"),
+)
+
+
+def coverage_reductions(data: Dict[str, Any]) -> Tuple[str, ...]:
+    """Mô tả những thiết lập trong tệp cấu hình làm hẹp phạm vi quét."""
+    notes = []
+    for key, label in _COVERAGE_KEYS:
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(value, list):
+            if not value:
+                continue
+            shown = ", ".join(str(item) for item in value[:5])
+            if len(value) > 5:
+                shown += ", ... (%d mục)" % len(value)
+            notes.append("%s: %s" % (label, shown))
+        else:
+            notes.append("%s: %s" % (label, value))
+    return tuple(notes)
 
 
 def find_config_file(start: Path) -> Optional[Path]:
@@ -163,7 +220,7 @@ def load_config_file(path: Path) -> Dict[str, Any]:
         size = path.stat().st_size
     except OSError as exc:
         raise ConfigError("không đọc được thông tin tệp cấu hình %s" % path) from exc
-    if size > _MAX_CONFIG_BYTES:
+    if size > MAX_CONFIG_BYTES:
         raise ConfigError("tệp cấu hình lớn bất thường: %s" % path)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -182,7 +239,12 @@ def build_config(data: Dict[str, Any], base: Optional[Config] = None) -> Config:
     config = base or Config()
     unknown = sorted(set(data) - _ALLOWED_KEYS)
     if unknown:
-        raise ConfigError("khóa cấu hình không hợp lệ: %s" % ", ".join(unknown))
+        # repr() như mọi thông báo lỗi khác ở đây: tên khóa là do tệp cấu hình
+        # đặt, tức là do người viết repo bị quét đặt, nên nó không được đi
+        # nguyên xi vào một thông báo sẽ in ra terminal.
+        raise ConfigError(
+            "khóa cấu hình không hợp lệ: %s" % ", ".join(repr(key) for key in unknown)
+        )
 
     overrides: Dict[str, Any] = {}
     for key, value in data.items():

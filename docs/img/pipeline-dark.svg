@@ -1,0 +1,52 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 386' width='900' height='386' role='img'><defs><marker id='adark' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M 0 0 L 10 5 L 0 10 z' fill='#a3aec6' opacity='0.75'/></marker></defs>
+<text x='24' y='30' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='14.5' fill='#e9eef8' text-anchor='start' font-weight='700'>Sáu bước xảy ra khi anh em gõ lệnh quét</text>
+<text x='24' y='52' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='11.5' fill='#a3aec6' text-anchor='start' font-weight='400'>Bước 1 là lý do anh em trỏ được công cụ vào mã lạ mà không cần dựng sandbox riêng.</text>
+<rect x='24' y='80' width='272' height='108' rx='10' fill='#ff8585' opacity='0.11'/>
+<rect x='24' y='80' width='272' height='108' rx='10' fill='none' stroke='#ff8585' stroke-width='1.4' opacity='0.50'/>
+<rect x='24' y='80' width='4' height='108' rx='2' fill='#ff8585' opacity='0.95'/>
+<text x='42' y='106' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='11' fill='#a3aec6' text-anchor='start' font-weight='700'>1</text>
+<text x='58' y='106' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='13' fill='#ff8585' text-anchor='start' font-weight='700'>Khoá tiến trình</text>
+<text x='42' y='132' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10.5' fill='#e9eef8' text-anchor='start' font-weight='400' opacity='0.92'>vá đè socket, subprocess, os.system</text>
+<text x='42' y='154' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10' fill='#a3aec6' text-anchor='start' font-weight='400'>dù có lỗi cũng không chạy được mã</text>
+<line x1='300' y1='134' x2='308' y2='134' stroke='#a3aec6' stroke-width='1.4' stroke-linecap='round' marker-end='url(#adark)' opacity='0.70'/>
+<rect x='314' y='80' width='272' height='108' rx='10' fill='#ffc255' opacity='0.11'/>
+<rect x='314' y='80' width='272' height='108' rx='10' fill='none' stroke='#ffc255' stroke-width='1.4' opacity='0.50'/>
+<rect x='314' y='80' width='4' height='108' rx='2' fill='#ffc255' opacity='0.95'/>
+<text x='332' y='106' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='11' fill='#a3aec6' text-anchor='start' font-weight='700'>2</text>
+<text x='348' y='106' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='13' fill='#ffc255' text-anchor='start' font-weight='700'>Tìm tệp</text>
+<text x='332' y='132' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10.5' fill='#e9eef8' text-anchor='start' font-weight='400' opacity='0.92'>bỏ thư mục loại trừ, tệp nhị phân</text>
+<text x='332' y='154' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10' fill='#a3aec6' text-anchor='start' font-weight='400'>không đi theo liên kết ra ngoài</text>
+<line x1='590' y1='134' x2='598' y2='134' stroke='#a3aec6' stroke-width='1.4' stroke-linecap='round' marker-end='url(#adark)' opacity='0.70'/>
+<rect x='604' y='80' width='272' height='108' rx='10' fill='#ffd479' opacity='0.11'/>
+<rect x='604' y='80' width='272' height='108' rx='10' fill='none' stroke='#ffd479' stroke-width='1.4' opacity='0.50'/>
+<rect x='604' y='80' width='4' height='108' rx='2' fill='#ffd479' opacity='0.95'/>
+<text x='622' y='106' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='11' fill='#a3aec6' text-anchor='start' font-weight='700'>3</text>
+<text x='638' y='106' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='13' fill='#ffd479' text-anchor='start' font-weight='700'>Đọc và giải mã</text>
+<text x='622' y='132' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10.5' fill='#e9eef8' text-anchor='start' font-weight='400' opacity='0.92'>giải mã đúng khai báo # coding:</text>
+<text x='622' y='154' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10' fill='#a3aec6' text-anchor='start' font-weight='400'>để thấy đúng thứ CPython sẽ chạy</text>
+<rect x='24' y='218' width='272' height='108' rx='10' fill='#4cd8c2' opacity='0.11'/>
+<rect x='24' y='218' width='272' height='108' rx='10' fill='none' stroke='#4cd8c2' stroke-width='1.4' opacity='0.50'/>
+<rect x='24' y='218' width='4' height='108' rx='2' fill='#4cd8c2' opacity='0.95'/>
+<text x='42' y='244' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='11' fill='#a3aec6' text-anchor='start' font-weight='700'>4</text>
+<text x='58' y='244' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='13' fill='#4cd8c2' text-anchor='start' font-weight='700'>Phân tích</text>
+<text x='42' y='270' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10.5' fill='#e9eef8' text-anchor='start' font-weight='400' opacity='0.92'>truy vết đường đi của dữ liệu</text>
+<text x='42' y='292' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10' fill='#a3aec6' text-anchor='start' font-weight='400'>AST cho Python, lexer cho phần còn lại</text>
+<line x1='300' y1='272' x2='308' y2='272' stroke='#a3aec6' stroke-width='1.4' stroke-linecap='round' marker-end='url(#adark)' opacity='0.70'/>
+<rect x='314' y='218' width='272' height='108' rx='10' fill='#93a2ff' opacity='0.11'/>
+<rect x='314' y='218' width='272' height='108' rx='10' fill='none' stroke='#93a2ff' stroke-width='1.4' opacity='0.50'/>
+<rect x='314' y='218' width='4' height='108' rx='2' fill='#93a2ff' opacity='0.95'/>
+<text x='332' y='244' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='11' fill='#a3aec6' text-anchor='start' font-weight='700'>5</text>
+<text x='348' y='244' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='13' fill='#93a2ff' text-anchor='start' font-weight='700'>Lọc</text>
+<text x='332' y='270' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10.5' fill='#e9eef8' text-anchor='start' font-weight='400' opacity='0.92'>chỉ thị ignore, ngưỡng, baseline</text>
+<text x='332' y='292' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10' fill='#a3aec6' text-anchor='start' font-weight='400'>thứ gì làm hẹp phạm vi đều bị nói ra</text>
+<line x1='590' y1='272' x2='598' y2='272' stroke='#a3aec6' stroke-width='1.4' stroke-linecap='round' marker-end='url(#adark)' opacity='0.70'/>
+<rect x='604' y='218' width='272' height='108' rx='10' fill='#d3a4ff' opacity='0.11'/>
+<rect x='604' y='218' width='272' height='108' rx='10' fill='none' stroke='#d3a4ff' stroke-width='1.4' opacity='0.50'/>
+<rect x='604' y='218' width='4' height='108' rx='2' fill='#d3a4ff' opacity='0.95'/>
+<text x='622' y='244' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='11' fill='#a3aec6' text-anchor='start' font-weight='700'>6</text>
+<text x='638' y='244' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='13' fill='#d3a4ff' text-anchor='start' font-weight='700'>Báo cáo</text>
+<text x='622' y='270' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10.5' fill='#e9eef8' text-anchor='start' font-weight='400' opacity='0.92'>console, JSON, SARIF, Markdown</text>
+<text x='622' y='292' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10' fill='#a3aec6' text-anchor='start' font-weight='400'>kèm mã thoát cho cổng CI</text>
+<path d='M 740 188 L 740 203 L 160 203 L 160 213' fill='none' stroke='#a3aec6' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round' marker-end='url(#adark)' opacity='0.70'/>
+<text x='24' y='372' font-family='Segoe UI, system-ui, -apple-system, sans-serif' font-size='10.5' fill='#a3aec6' text-anchor='start' font-weight='400'>Mỗi tệp có ngân sách node/token riêng, nên một tệp dựng riêng để làm treo công cụ sẽ bị cắt chứ không kéo cả lượt quét đi theo.</text>
+</svg>

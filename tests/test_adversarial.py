@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import os
+import time
 import socket
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from fortress_scan import cli
 from fortress_scan.core.config import Config, ConfigError, build_config
 from fortress_scan.core.engine import scan, scan_source
+from fortress_scan.core.suppression import SuppressionIndex
 from fortress_scan.languages import PYTHON
 from fortress_scan.report import ConsoleReporter, to_json, to_sarif
 from fortress_scan.security import runtime as sandbox
@@ -176,6 +180,306 @@ class TestAttacksOnTheScanner:
         assert any(error.reason == "parse-error" for error in result.errors)
         assert any(f.rule_id == "FSB-UNI-002" for f in result.findings)
 
+    def test_unclosed_interpolation_cannot_hang_the_suppression_masker(self):
+        """Bộ mặt nạ chuỗi chạy NGOÀI Budget của engine, nên nó tự mang hạn mức.
+
+        Một dòng `"${${${...` không có dấu đóng bắt _scan_to_closer quét lại tới
+        cuối dòng ở từng vị trí một. Không chặn thì đó là O(n^2): tệp 16 KB tốn
+        128 triệu bước, và 2 MB mặc định của max_file_bytes đủ treo lượt quét
+        hàng chục giờ -- trong khi mọi ngân sách của engine đều đã chạy xong.
+        """
+        payload = '// fortress-scan\nvar T = "' + "${" * 8000
+        index = SuppressionIndex.from_lines(tuple(payload.split("\n")))
+
+        assert index.overflowed, "hạn mức không chạm tới payload nên phép thử vô nghĩa"
+        assert not bool(index), "tràn hạn mức thì không chỉ thị nào được giữ lại"
+
+    def test_masker_overflow_hides_nothing_and_says_so(self, tmp_path: Path):
+        """Hướng an toàn khi cạn hạn mức: bỏ hết chỉ thị chứ không bỏ qua tệp.
+
+        Cùng lối với IgnoreSet.overflowed -- không phát hiện nào bị giấu, và
+        người đọc báo cáo biết vì sao chỉ thị trong tệp này không còn tác dụng.
+        """
+        (tmp_path / "evil.py").write_text(
+            "# fortress-scan: ignore-file\n"
+            'T = "' + "${" * 40000 + '"\n'
+            "import os\n"
+            "os.system(input())\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+
+        assert any(
+            error.reason == "suppression-scan-too-complex" for error in result.errors
+        )
+        assert result.suppressed == 0, "tràn hạn mức mà vẫn ẩn được phát hiện"
+
+    def test_a_dense_but_honest_file_keeps_its_directives(self):
+        """Hạn mức phải phân biệt được mã thật với payload.
+
+        Template literal lồng nhau là thứ _scan_to_closer sinh ra để xử lý, và
+        trên mã thật việc quét đó tuyến tính (đo được nhiều nhất ~1 bước mỗi ký
+        tự). Nếu hạn mức chặn cả những tệp này thì chú thích ignore của anh em
+        im lặng ngừng hoạt động ở mọi tệp đã minify.
+        """
+        dense = "".join(
+            "const t%d = `a${`b${`c${d}`}`}`;\n" % index for index in range(20000)
+        )
+        lines = tuple((dense + "// fortress-scan: ignore-file\n").split("\n"))
+        index = SuppressionIndex.from_lines(lines)
+
+        assert not index.overflowed, "tệp hợp lệ dày đặc lại bị coi là quá phức tạp"
+        assert bool(index), "chỉ thị thật trong tệp dày đặc phải vẫn được nhận"
+
+    def test_config_file_reached_through_a_link_is_not_read(self, tmp_path: Path):
+        """`.fortress-scan.json` tự tìm thấy trong cây quét là dữ liệu không tin
+        cậy, nên nó không được phép là một liên kết.
+
+        Đi theo liên kết ở đây là đọc một tệp NGOÀI thư mục được trỏ tới, kể cả
+        khi --follow-symlinks đang tắt; tên khoá trong tệp đó lại đi thẳng ra
+        stderr, thành ra vừa là oracle vừa là chỗ rò. Ignore file đã chặn đúng
+        chuyện này từ trước, tệp cấu hình thì chưa.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "private.json"
+        secret.write_text(json.dumps({"aws_secret_access_key": 1}), encoding="utf-8")
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "app.py").write_text("value = 1\n", encoding="utf-8")
+        try:
+            (target / ".fortress-scan.json").symlink_to(secret)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation is not permitted in this environment")
+
+        # Khoá lạ trong tệp cấu hình vốn làm cli thoát EXIT_USAGE. Đọc được tệp
+        # ngoài kia thì mã thoát là 2; từ chối liên kết thì lượt quét chạy bình
+        # thường bằng cấu hình mặc định.
+        assert cli.main([str(target), "--quiet"]) == 0
+
+    def test_link_in_place_of_a_config_file_is_reported(self, tmp_path: Path):
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "app.py").write_text("value = 1\n", encoding="utf-8")
+        (target / "elsewhere.json").write_text("{}", encoding="utf-8")
+        try:
+            (target / ".fortress-scan.json").symlink_to(target / "elsewhere.json")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation is not permitted in this environment")
+
+        config, notices = cli._config_from_file(
+            argparse.Namespace(no_config=False, config=None, target=str(target))
+        )
+        assert notices, "bỏ qua tệp cấu hình mà không nói ra thì cũng là im lặng"
+        assert any("liên kết" in line for line in notices)
+
+
+class TestSinkHiddenInsideALambda:
+    """Đổi `def` thành `lambda` từng là cách giấu một sink trọn vẹn.
+
+    ast.Lambda là node biểu thức duy nhất trả về UNKNOWN mà không đọc cây con
+    của mình, nên cả thân lambda chưa từng được duyệt: không taint, mà cũng
+    không cả rule "biểu thức không phải hằng". Comprehension, generator và
+    `def` lồng nhau đều được đọc -- chỉ lambda là điểm mù.
+    """
+
+    def test_source_to_sink_entirely_inside_a_lambda(self):
+        source = (
+            "from flask import request\n"
+            "handler = lambda: eval(request.args.get('x'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_lambda_closes_over_a_tainted_local(self):
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    run = lambda: eval(payload)\n"
+            "    return run\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_lambda_hidden_in_a_call_argument(self):
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    return sorted([1], key=lambda item: eval(payload))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_taint_carried_in_through_a_default_argument(self):
+        """Mặc định được tính tại chỗ định nghĩa, đúng như Python làm."""
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    run = lambda q=payload: eval(q)\n"
+            "    return run\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_parameter_shadows_the_enclosing_name(self):
+        """Tham số lambda che tên trùng ở ngoài: giá trị lúc gọi ta không biết.
+
+        Vẫn phải còn lại rule "biểu thức không phải hằng" -- im lặng hoàn toàn
+        mới là hỏng.
+        """
+        source = (
+            "from flask import request\n"
+            "def outer():\n"
+            "    payload = request.args.get('x')\n"
+            "    run = lambda payload: eval(payload)\n"
+            "    return run('an toan')\n"
+        )
+        ids = rule_ids(source)
+        assert "FSB-EXEC-001" not in ids
+        assert "FSB-EXEC-002" in ids
+
+    def test_an_immediately_invoked_lambda(self):
+        """`(lambda: sink())()` -- cùng điểm mù, chỉ khác chỗ đặt dấu ngoặc.
+
+        _eval_call chỉ đọc `node.func` cho Call/Subscript/IfExp, nên một lambda
+        gọi ngay vẫn lọt qua kể cả sau khi _eval_lambda đã có.
+        """
+        source = (
+            "from flask import request\n"
+            "result = (lambda: eval(request.args.get('x')))()\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_lambda_returning_another_lambda(self):
+        source = (
+            "from flask import request\n"
+            "handler = lambda: (lambda: eval(request.args.get('x')))()\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_an_ordinary_lambda_stays_quiet(self):
+        source = "nums = [3, 1, 2]\nout = sorted(nums, key=lambda value: value * 2)\n"
+        assert rule_ids(source) == []
+
+
+class TestSinkHiddenWhereStatementsStillRun:
+    """Hai chỗ chạy ngay lúc import mà bộ phân tích chưa từng bước vào.
+
+    _execute chỉ đọc decorator của ClassDef và FunctionDef rồi trả về, nên thân
+    class và giá trị mặc định của tham số là điểm mù trọn vẹn -- dù cả hai đều
+    thực thi thật ở thời điểm định nghĩa, không phải lúc gọi.
+    """
+
+    def test_a_sink_in_a_class_body(self):
+        source = (
+            "from flask import request\n"
+            "class Config:\n"
+            "    value = eval(request.args.get('v'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_nested_class_body(self):
+        source = (
+            "from flask import request\n"
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        value = eval(request.args.get('v'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_parameter_default(self):
+        source = (
+            "from flask import request\n"
+            "def handler(callback=eval(request.args.get('v'))):\n"
+            "    return callback\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_keyword_only_default(self):
+        source = (
+            "from flask import request\n"
+            "def handler(*, callback=eval(request.args.get('v'))):\n"
+            "    return callback\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_sink_in_a_method_default(self):
+        source = (
+            "from flask import request\n"
+            "class C:\n"
+            "    def m(self, callback=eval(request.args.get('v'))):\n"
+            "        return callback\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_a_class_body_does_not_leak_into_the_enclosing_scope(self):
+        """Tên gán trong thân class thành thuộc tính của class, không phải biến
+        của scope bao ngoài -- nên nó không được nhiễm hộ một tên trùng ở ngoài.
+        """
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "class C:\n"
+            "    value = request.args.get('v')\n"
+            "value = 'hằng an toàn'\n"
+            "os.system('echo ' + value)\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_ordinary_class_bodies_and_defaults_stay_quiet(self):
+        source = (
+            "from dataclasses import dataclass, field\n"
+            "class Plain:\n"
+            "    NAME = 'x'\n"
+            "    LIMIT = 10\n"
+            "@dataclass\n"
+            "class Data:\n"
+            "    a: int = 0\n"
+            "    b: list = field(default_factory=list)\n"
+            "def f(a=1, b='x', *, c=None, **kw):\n"
+            "    return a\n"
+        )
+        assert rule_ids(source) == []
+
+
+class TestReportsCannotBeRewrittenByTheCodeTheyDescribe:
+    """Trích đoạn trong báo cáo là do người viết tệp được quét soạn ra."""
+
+    def test_snippet_cannot_break_out_of_the_markdown_code_fence(self):
+        """Hàng rào ba dấu ` cứng bị chính trích đoạn đóng lại giữa chừng.
+
+        Phần đuôi rơi ra ngoài thành Markdown thật, đủ để nhét HTML hay nguyên
+        một mục "Các phát hiện" giả vào bản báo cáo người ta đang đọc.
+        """
+        from fortress_scan.core.model import ScanResult
+        from fortress_scan.report import to_markdown
+
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    name = request.args.get('n')\n"
+            '    os.system("ping " + name + "```<img src=x onerror=alert(1)>```")\n'
+        )
+        result = ScanResult(root="/tmp", findings=scan_source(source, PYTHON, "app.py"))
+        lines = to_markdown(result, "test").split("\n")
+
+        fences = [index for index, text in enumerate(lines) if text == "````"]
+        assert len(fences) >= 2, "hàng rào không nới ra theo nội dung"
+        start, end = fences[0], fences[1]
+        body = lines[start + 1 : end]
+        assert any("<img" in text for text in body), "trích đoạn đi đâu mất"
+        assert not any(
+            text.strip() in ("```", "````") for text in body
+        ), "trích đoạn tự đóng khối mã, phần đuôi thành Markdown thật"
+
+    def test_a_link_cannot_be_smuggled_into_report_prose(self):
+        from fortress_scan.report.structured import _escape
+
+        escaped = _escape("[bam vao day](http://evil)")
+        assert escaped.startswith("\\["), "cú pháp liên kết đi thẳng vào báo cáo"
+        assert "\\]" in escaped
+
 
 class TestEvasionAttempts:
     def test_aliased_module_import(self):
@@ -281,6 +585,400 @@ class TestEvasionAttempts:
         strict = Config(honor_inline_suppressions=False)
         assert "FSB-CMD-001" in rule_ids(source, strict)
 
+    def test_source_encoding_declaration_cannot_hide_code(self, tmp_path: Path):
+        """PEP 263: CPython đọc tệp theo bảng mã được khai báo.
+
+        Đọc cứng UTF-8 thì `+AAo-` chỉ là chữ trong một dòng chú thích, còn
+        CPython giải theo UTF-7 lại thấy đó là dấu xuống dòng -- nên toàn bộ
+        đoạn injection nằm ngoài AST và báo cáo sạch trơn.
+        """
+        (tmp_path / "evil.py").write_bytes(
+            b"# -*- coding: utf-7 -*-\n"
+            b"#+AAo-import os+AAo-from flask import request+AAo-"
+            b'def handler():+AAo-    os.system(request.args.get("h"))+AAo-\n'
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_encoding_declaration_snippet_shows_the_real_code(self, tmp_path: Path):
+        (tmp_path / "evil.py").write_bytes(
+            b"# coding: utf-7\n#+AAo-import os+AAo-os.system(input())+AAo-\n"
+        )
+        result = scan(str(tmp_path), Config())
+        command = [f for f in result.findings if f.rule_id == "FSB-CMD-001"]
+        assert command, "phai bat duoc injection that"
+        assert "os.system" in command[0].snippet
+
+    def test_encoding_declaration_on_the_second_line_is_honoured(self, tmp_path: Path):
+        (tmp_path / "evil.py").write_bytes(
+            b"#!/usr/bin/env python\n"
+            b"# coding: utf-7\n"
+            b"#+AAo-import os+AAo-os.system(input())+AAo-\n"
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_plain_utf8_python_is_unaffected(self, tmp_path: Path):
+        (tmp_path / "app.py").write_bytes(
+            "# -*- coding: utf-8 -*-\n"
+            "import os\n"
+            'ten = "Nguyễn Văn A"\n'
+            "def handler():\n"
+            "    os.system(input())\n".encode("utf-8")
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_bogus_encoding_declaration_does_not_crash(self, tmp_path: Path):
+        (tmp_path / "weird.py").write_bytes(
+            b"# coding: khong-ton-tai-dau\nimport os\nos.system(input())\n"
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_encoding_declaration_is_not_applied_to_other_languages(self, tmp_path: Path):
+        """PEP 263 chỉ là quy ước của Python; áp cho PHP sẽ tạo ra một desync mới."""
+        (tmp_path / "index.php").write_bytes(
+            b"<?php\n# coding: utf-7\n$cmd = $_GET['c'];\nsystem('ping ' . $cmd);\n"
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_every_documented_suppression_scope_actually_works(self):
+        """`ignore-file` và `ignore-next-line` từng im lặng rơi về `ignore`.
+
+        Nhánh trong regex là "khớp cái đầu tiên", nên `ignore` đứng đầu nuốt
+        luôn tiền tố của hai phạm vi kia -- tài liệu ghi một đằng, công cụ làm
+        một nẻo, và người dùng không hiểu vì sao vẫn bị báo.
+        """
+        body = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(body), "mẫu gốc phải bị báo"
+
+        whole_file = "# fortress-scan: ignore-file\n" + body
+        assert "FSB-CMD-001" not in rule_ids(whole_file)
+
+        next_line = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    # fortress-scan: ignore-next-line\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(next_line)
+
+        same_line = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))  # fortress-scan: ignore\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(same_line)
+
+    def test_ignore_next_line_does_not_cover_other_lines(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    # fortress-scan: ignore-next-line\n"
+            "    a = request.args.get('c')\n"
+            "    os.system(a)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source), "chỉ được che đúng một dòng"
+
+    def test_every_suppression_scope_is_defeatable(self):
+        strict = Config(honor_inline_suppressions=False)
+        for directive in ("ignore-file", "ignore-next-line", "ignore"):
+            source = (
+                "# fortress-scan: %s\n"
+                "import os\n"
+                "from flask import request\n"
+                "def handler():\n"
+                "    # fortress-scan: %s\n"
+                "    os.system(request.args.get('c'))  # fortress-scan: %s\n"
+                % (directive, directive, directive)
+            )
+            assert "FSB-CMD-001" in rule_ids(source, strict), directive
+
+    def test_suppression_directive_inside_a_string_is_not_a_directive(self):
+        """Một hằng chuỗi không phải là chỉ thị.
+
+        Nếu tính, thì một dòng trông vô hại như HELP = "# fortress-scan:
+        ignore-file" sẽ tắt cả tệp mà không ai nhận ra khi review.
+        """
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            'HELP = "# fortress-scan: ignore-file"\n'
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_suppression_directive_inside_a_docstring_is_not_a_directive(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def helper():\n"
+            '    """Ví dụ: # fortress-scan: ignore-file"""\n'
+            "    return 1\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_directive_inside_a_nested_template_literal(self, tmp_path: Path):
+        """`outer ${`inner`} end` là JavaScript hợp lệ.
+
+        Vùng nội suy là mã nên nó được phép chứa một chuỗi lồng dùng đúng dấu
+        backtick đang mở. Ai chỉ so khớp ký tự sẽ đóng chuỗi ở dấu backtick
+        thứ hai, để lộ phần ruột ra ngoài thành mã, và một chỉ thị nằm trong
+        dữ liệu lại được tính như chú thích thật -- tắt sạch cả tệp.
+        """
+        (tmp_path / "app.js").write_text(
+            "const { exec } = require('child_process');\n"
+            "const label = `outer ${`# fortress-scan: ignore-file`} end`;\n"
+            "function run(req) {\n"
+            "  exec('ping ' + req.query.host);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+        assert result.suppressed == 0
+
+    def test_a_real_comment_after_a_nested_template_literal_still_works(self, tmp_path: Path):
+        (tmp_path / "app.js").write_text(
+            "const { exec } = require('child_process');\n"
+            "const label = `outer ${`inner`} end`;\n"
+            "// fortress-scan: ignore-file\n"
+            "function run(req) {\n"
+            "  exec('ping ' + req.query.host);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        assert not any(f.rule_id == "FSB-CMD-001" for f in result.findings)
+
+    def test_suppression_directive_inside_a_multiline_docstring(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            'DOC = """\n'
+            "# fortress-scan: ignore-file\n"
+            '"""\n'
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    @pytest.mark.parametrize(
+        "name,source",
+        [
+            # `//` là phép chia nguyên của Python, không phải chú thích.
+            (
+                "app.py",
+                "import os\n"
+                "from flask import request\n"
+                'CHUNK = 1024 // 2 ; NOTE = "# fortress-scan: ignore-file"\n'
+                "def handler():\n"
+                "    os.system(request.args.get('c'))\n",
+            ),
+            # `--` là toán tử giảm, không phải chú thích, ở mọi ngôn ngữ ở đây.
+            (
+                "app.js",
+                "const cp = require('child_process');\n"
+                'let i = 5; i--; const NOTE = "// fortress-scan: ignore-file";\n'
+                "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            ),
+            # `#` là trường riêng tư của JavaScript, không phải chú thích.
+            (
+                "priv.js",
+                "const cp = require('child_process');\n"
+                'class A { #x = "// fortress-scan: ignore-file"; }\n'
+                "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            ),
+            # Chú thích khối ĐÓNG LẠI; sau `*/` là mã thật, và mã thật có chuỗi.
+            (
+                "block.js",
+                "const cp = require('child_process');\n"
+                '/* ghi chu */ const NOTE = "// fortress-scan: ignore-file";\n'
+                "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            ),
+            # `--` đứng trước một tham số dòng lệnh trong shell.
+            (
+                "deploy.sh",
+                "#!/bin/bash\n"
+                'rm -f -- "$1"; MSG="# fortress-scan: ignore-file"\n'
+                'eval "$USER_INPUT"\n',
+            ),
+            # Trong shell, `#` chỉ mở chú thích khi nó bắt đầu một từ; một
+            # fragment của URL thì không.
+            (
+                "fetch.sh",
+                "#!/bin/bash\n"
+                'curl http://example.com/#frag; MSG="# fortress-scan: ignore-file"\n'
+                'eval "$USER_INPUT"\n',
+            ),
+            # `a <!--b` là `a < !(--b)`: biểu thức hợp lệ, không phải chú thích.
+            (
+                "Legacy.java",
+                "public class Legacy {\n"
+                "  void f(String q) {\n"
+                "    int a = 1, b = 1;\n"
+                "    boolean c = a <!--b;\n"
+                '    String n = "// fortress-scan: ignore-file";\n'
+                "    java.sql.Statement s = null;\n"
+                "    s.executeQuery(\"SELECT * FROM t WHERE x='\" + q + \"'\");\n"
+                "  }\n"
+                "}\n",
+            ),
+        ],
+    )
+    def test_operator_that_looks_like_a_comment_marker_cannot_suppress(
+        self, tmp_path: Path, name: str, source: str
+    ):
+        """Một danh sách dấu chú thích dùng chung cho mọi ngôn ngữ là đường lách.
+
+        Bộ mặt nạ dừng ở dấu mở chú thích ĐẦU TIÊN và giữ nguyên phần đuôi dòng.
+        Nếu dấu đó không phải chú thích trong ngôn ngữ đang đọc -- `//` trong
+        Python, `--` hay `#` trong JavaScript -- thì hằng chuỗi nằm sau nó lọt
+        ra ngoài và được tính như chú thích thật, tắt sạch cả tệp. Đúng thứ mà
+        README hứa là không xảy ra, chỉ khác chỗ đặt dấu.
+        """
+        (tmp_path / name).write_text(source, encoding="utf-8")
+        result = scan(str(tmp_path), Config())
+
+        assert result.findings, "chuỗi giả dạng chú thích vẫn tắt được cả tệp"
+        assert result.suppressed == 0
+
+    def test_a_real_comment_still_suppresses_in_each_language(self, tmp_path: Path):
+        """Mặt kia của phép thử trên: chú thích thật phải vẫn còn tác dụng."""
+        (tmp_path / "app.py").write_text(
+            "import os\n"
+            "from flask import request\n"
+            "# fortress-scan: ignore-file\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "app.js").write_text(
+            "const cp = require('child_process');\n"
+            "/* fortress-scan: ignore-file */\n"
+            "function run(req) { cp.exec('ping ' + req.query.host); }\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "deploy.sh").write_text(
+            "#!/bin/bash\n"
+            "if true; then\n"
+            "    # fortress-scan: ignore-file\n"
+            '    eval "$USER_INPUT"\n'
+            "fi\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+
+        assert not result.findings
+        assert result.suppressed == 3
+
+    def test_an_html_comment_directive_survives_the_marker_table(self):
+        """`<!--` bị gỡ khỏi bảng chú thích khối, nhưng chỉ thị phải vẫn chạy.
+
+        Bảng đó không phải thứ cho phép một chỉ thị hoạt động: _mask_line chép
+        nguyên văn mọi ký tự không nằm trong chuỗi, nên chỉ thị vẫn tới được bộ
+        dò. Bảng chỉ quyết định có phơi nguyên phần đuôi dòng ra hay không. Mất
+        phép thử này là mất luôn lý do vì sao gỡ `<!--` lại an toàn.
+        """
+        source = (
+            "const cp = require('child_process');\n"
+            "<!-- fortress-scan: ignore-file -->\n"
+            "function run(req) { cp.exec('ping ' + req.query.host); }\n"
+        )
+        assert scan_source(source, "javascript", "page.vue") == []
+
+    def test_sarif_says_when_a_directive_removed_a_finding(self, tmp_path: Path):
+        """SARIF là đường vào code scanning của CI, nên im lặng ở đây tốn nhất.
+
+        Console đã đếm số phát hiện bị chú thích che đi. SARIF thì từng xuất ra
+        `results: []` kèm `toolExecutionNotifications: []` -- không phân biệt
+        được với một lượt quét sạch thật sự.
+        """
+        (tmp_path / "app.py").write_text(
+            "import os\n"
+            "from flask import request\n"
+            "# fortress-scan: ignore-file\n"
+            "def handler():\n"
+            "    os.system(request.args.get('c'))\n",
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        document = json.loads(to_sarif(result, "test"))
+        notifications = document["runs"][0]["invocations"][0][
+            "toolExecutionNotifications"
+        ]
+
+        assert result.suppressed == 1
+        assert any(
+            item["descriptor"]["id"] == "findings-suppressed" for item in notifications
+        )
+
+    def test_project_config_hiding_is_announced_and_defeatable(self, tmp_path: Path):
+        """Tệp cấu hình nằm trong cây bị quét là do người viết mã đó kiểm soát.
+
+        Nó có thể biến exit 1 thành exit 0 và in ra "sạch"; im lặng ở đây chính
+        là thứ tạo ra false confidence, nên phải nói rõ đã tắt những gì.
+        """
+        import io
+        import sys
+
+        from fortress_scan.cli import main
+
+        (tmp_path / "app.py").write_text(
+            "import os\nfrom flask import request\n"
+            "def handler():\n    os.system(request.args.get('c'))\n",
+            encoding="utf-8",
+        )
+        (tmp_path / ".fortress-scan.json").write_text(
+            '{"disabled_rules": ["FSB-CMD-001", "FSB-CMD-003"]}', encoding="utf-8"
+        )
+
+        errors = io.StringIO()
+        original = sys.stderr
+        sys.stderr = errors
+        try:
+            hidden = main([str(tmp_path), "--no-color"])
+        finally:
+            sys.stderr = original
+
+        assert hidden == 0, "cấu hình của kẻ tấn công vẫn che được phát hiện"
+        message = errors.getvalue()
+        assert "thu hẹp phạm vi quét" in message, "phải cảnh báo khi phạm vi bị thu hẹp"
+        assert "FSB-CMD-001" in message, "phải nói rõ rule nào bị tắt"
+        assert "--no-config" in message, "phải chỉ ra cách bỏ qua tệp cấu hình"
+
+        assert main([str(tmp_path), "--no-color", "--no-config"]) == 1
+
+    def test_harmless_project_config_stays_quiet(self, tmp_path: Path):
+        import io
+        import sys
+
+        from fortress_scan.cli import main
+
+        (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / ".fortress-scan.json").write_text('{"jobs": 2}', encoding="utf-8")
+        errors = io.StringIO()
+        original = sys.stderr
+        sys.stderr = errors
+        try:
+            main([str(tmp_path), "--no-color"])
+        finally:
+            sys.stderr = original
+        assert "thu hẹp phạm vi quét" not in errors.getvalue()
+
     def test_vcs_ignore_hiding_is_defeatable(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("hidden.py\n", encoding="utf-8")
         (tmp_path / "hidden.py").write_text(
@@ -293,8 +991,413 @@ class TestEvasionAttempts:
         assert any(f.rule_id == "FSB-CMD-001" for f in exposed.findings)
 
 
+class TestSinkReachedThroughAnAlias:
+    """A sink stays a sink when the call goes through a name that holds it.
+
+    Sink matching is by API name, so storing the callable in a variable, a
+    dispatch table or a getattr() used to make the call unrecognisable and the
+    finding vanished silently.
+    """
+
+    def test_sink_assigned_to_a_local_variable(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    func = os.system\n"
+            "    func(cmd)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sink_held_in_a_dispatch_table(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    handlers = {'run': os.system}\n"
+            "    handlers['run'](cmd)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sink_held_in_a_list(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    ops = [os.system]\n"
+            "    ops[0](cmd)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sink_reached_by_getattr_with_a_constant_name(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    getattr(os, 'system')(request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_dispatch_table_indexed_by_untrusted_input(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    handlers = {'run': os.system, 'show': print}\n"
+            "    handlers[request.args.get('k')](request.args.get('c'))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_dispatch_table_too_large_to_map_falls_back_to_the_union(self):
+        """The per-key map is bounded; dropping it must lose precision, not the
+        finding, or a padded table would be an evasion."""
+        table = ", ".join("'k%d': os.system" % index for index in range(400))
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    handlers = {%s}\n"
+            "    handlers['k399'](cmd)\n" % table
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_method_sink_assigned_to_a_local_variable(self):
+        source = (
+            "from flask import request\n"
+            "def handler(cursor):\n"
+            "    name = request.args.get('n')\n"
+            "    run = cursor.execute\n"
+            "    run(f\"SELECT * FROM users WHERE name = '{name}'\")\n"
+        )
+        assert "FSB-SQL-001" in rule_ids(source)
+
+    def test_builtin_sink_assigned_to_a_local_variable(self):
+        source = (
+            "from flask import request\n"
+            "def handler():\n"
+            "    run = eval\n"
+            "    run(request.args.get('e'))\n"
+        )
+        assert "FSB-EXEC-001" in rule_ids(source)
+
+    def test_template_sink_assigned_to_a_local_variable(self):
+        source = (
+            "from flask import request\n"
+            "def handler(env):\n"
+            "    render = env.from_string\n"
+            "    render(request.args.get('t'))\n"
+        )
+        assert "FSB-TMPL-001" in rule_ids(source)
+
+    def test_alias_of_a_local_wrapper_keeps_the_full_trace(self):
+        """Aliasing a wrapper used to downgrade critical to medium and drop the
+        data path, which reads as a code smell rather than an injection."""
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def run_cmd(c):\n"
+            "    os.system(c)\n"
+            "def handler():\n"
+            "    cmd = request.args.get('c')\n"
+            "    f = run_cmd\n"
+            "    f(cmd)\n"
+        )
+        findings = scan_source(source, PYTHON, "sample.py", Config())
+        command = [f for f in findings if f.rule_id == "FSB-CMD-001"]
+        assert command, "aliased wrapper must still report the injection"
+        assert any(step.label.startswith("tham số truy vấn HTTP") for step in command[0].trace)
+
+    def test_alias_through_a_branch_reports_both_targets(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler(flag):\n"
+            "    cmd = request.args.get('c')\n"
+            "    func = os.system if flag else eval\n"
+            "    func(cmd)\n"
+        )
+        ids = rule_ids(source)
+        assert "FSB-CMD-001" in ids
+        assert "FSB-EXEC-001" in ids
+
+
+class TestAliasTrackingStaysPrecise:
+    """Alias resolution must not blame a callable the call cannot reach."""
+
+    def test_constant_key_picks_only_that_dispatch_entry(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    handlers = {'safe': print, 'run': os.system}\n"
+            "    handlers['safe'](request.args.get('v'))\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_constant_index_picks_only_that_list_element(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    ops = [print, os.system]\n"
+            "    ops[0](request.args.get('v'))\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_a_sink_that_is_never_called_is_not_a_finding(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    runner = os.system\n"
+            "    return str(runner) + request.args.get('v')\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_alias_of_a_sanitizer_still_sanitizes(self):
+        source = (
+            "import shlex\n"
+            "import subprocess\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    quote = shlex.quote\n"
+            "    run = subprocess.run\n"
+            "    run('echo ' + quote(request.args.get('v')), shell=True)\n"
+        )
+        assert "FSB-CMD-001" not in rule_ids(source)
+
+    def test_alias_matches_the_direct_call_exactly(self):
+        """The alias path must add no finding the direct call would not make."""
+        direct = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    os.system('echo ' + request.args.get('v'))\n"
+        )
+        aliased = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    run = os.system\n"
+            "    run('echo ' + request.args.get('v'))\n"
+        )
+        assert sorted(rule_ids(direct)) == sorted(rule_ids(aliased))
+
+    def test_getattr_still_carries_the_taint_of_its_receiver(self):
+        """Naming a callable must not consume the data the call returns, or
+        reflection would launder taint instead of tracking it."""
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    obj = request.args.get('o')\n"
+            "    value = getattr(obj, 'name')\n"
+            "    os.system('echo ' + value)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_getattr_still_carries_the_taint_of_its_default(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    fallback = request.args.get('d')\n"
+            "    value = getattr(object(), 'missing', fallback)\n"
+            "    os.system('echo ' + value)\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_merging_an_unmappable_table_keeps_the_finding(self):
+        """One branch too large to map makes the other branch's key map
+        non-authoritative; keeping it would read as 'key absent'."""
+        table = ", ".join("'b%d': os.system" % index for index in range(400))
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def handler(flag):\n"
+            "    cmd = request.args.get('c')\n"
+            "    if flag:\n"
+            "        table = {'small': os.popen}\n"
+            "    else:\n"
+            "        table = {%s}\n"
+            "    table['b399'](cmd)\n" % table
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_a_plain_data_variable_is_not_treated_as_a_callable(self):
+        source = (
+            "from flask import request\n"
+            "def handler():\n"
+            "    system = request.args.get('v')\n"
+            "    return system\n"
+        )
+        assert rule_ids(source) == []
+
+
+class TestSanitizerNameShadowing:
+    """A shadowed sanitizer name must not hand out the real one's clearance.
+
+    Sink matching is name based, which is safe in the direction that adds a
+    finding. The suppression tables run the other way: trusting a name that no
+    longer reaches the import deletes a real finding and reports nothing at
+    all, so every rebinding the analyzer can see has to revoke that trust.
+    """
+
+    def test_local_object_shadowing_a_sanitizer_module(self):
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "class Fake:\n"
+            "    def quote(self, s):\n"
+            "        return s\n"
+            "def handler():\n"
+            "    shlex = Fake()\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_module_level_shadow_reaches_every_function(self):
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "shlex = None\n"
+            "def handler():\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_parameter_shadowing_a_sanitizer_module(self):
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "def handler(shlex):\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_sanitizer_attribute_patched_in_place(self):
+        source = (
+            "import ldap\n"
+            "from flask import request\n"
+            "ldap.filter.escape_filter_chars = lambda s: s\n"
+            "def handler(conn):\n"
+            "    name = request.args.get('v')\n"
+            "    conn.search_s('dc=x', 2, '(cn=' + "
+            "ldap.filter.escape_filter_chars(name) + ')')\n"
+        )
+        assert "FSB-LDAP-001" in rule_ids(source)
+
+    def test_local_def_shadowing_a_builtin_sanitizer(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "def int(s):\n"
+            "    return s\n"
+            "def handler():\n"
+            "    os.system('echo ' + int(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_shadowed_builtin_does_not_clear_sql_either(self):
+        """``int`` clears every category, so shadowing it would hide SQL too."""
+        source = (
+            "from flask import request\n"
+            "def int(s):\n"
+            "    return s\n"
+            "def handler(cur):\n"
+            "    cur.execute('select * from users where id = ' + int(request.args.get('id')))\n"
+        )
+        assert "FSB-SQL-001" in rule_ids(source)
+
+    def test_shadowed_trusted_producer(self):
+        source = (
+            "import os\n"
+            "from flask import request\n"
+            "class J:\n"
+            "    def dumps(self, o):\n"
+            "        return o\n"
+            "json = J()\n"
+            "def handler():\n"
+            "    os.system('echo ' + json.dumps(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_shadow_laundered_through_an_alias(self):
+        """Taking the alias from a shadowed module must not launder it clean."""
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "from flask import request\n"
+            "class Fake:\n"
+            "    def quote(self, s):\n"
+            "        return s\n"
+            "def handler():\n"
+            "    shlex = Fake()\n"
+            "    q = shlex.quote\n"
+            "    os.system('echo ' + q(request.args.get('v')))\n"
+        )
+        assert "FSB-CMD-001" in rule_ids(source)
+
+    def test_unsafe_yaml_loader_wearing_a_safe_name(self):
+        """The loader is recognised by name alone, so the name must be its own."""
+        source = (
+            "import yaml\n"
+            "from flask import request\n"
+            "SafeLoader = yaml.UnsafeLoader\n"
+            "def handler():\n"
+            "    return yaml.load(request.data, Loader=SafeLoader)\n"
+        )
+        assert "FSB-DESER-001" in rule_ids(source)
+
+    def test_safe_yaml_loader_attribute_patched_in_place(self):
+        source = (
+            "import yaml\n"
+            "from flask import request\n"
+            "yaml.SafeLoader = yaml.UnsafeLoader\n"
+            "def handler():\n"
+            "    return yaml.load(request.data, Loader=yaml.SafeLoader)\n"
+        )
+        assert "FSB-DESER-001" in rule_ids(source)
+
+    def test_genuine_safe_yaml_loader_stays_clean(self):
+        source = (
+            "import yaml\n"
+            "from flask import request\n"
+            "def handler():\n"
+            "    return yaml.load(request.data, Loader=yaml.SafeLoader)\n"
+        )
+        assert rule_ids(source) == []
+
+    def test_unshadowed_sanitizers_are_untouched(self):
+        """The guard must cost nothing where no name was rebound."""
+        source = (
+            "import os\n"
+            "import shlex\n"
+            "import html\n"
+            "from flask import request\n"
+            "def command():\n"
+            "    os.system('echo ' + shlex.quote(request.args.get('v')))\n"
+            "def markup():\n"
+            "    return '<b>' + html.escape(request.args.get('v')) + '</b>'\n"
+            "def numeric(cur):\n"
+            "    cur.execute('select * from t where id = ' + str(int(request.args.get('id'))))\n"
+        )
+        assert rule_ids(source) == []
+
+
 class TestDocumentedGaps:
-    def test_gap_taint_across_files_is_not_tracked(self, tmp_path: Path):
+    def test_cross_file_taint_is_now_tracked(self, tmp_path: Path):
+        """Khoảng trống này đã lấp: dữ liệu bẩn qua ranh giới tệp
+        được theo dõi ( tests/test_cross_file.py ). Giữ chỗ này để ghi nhớ
+        ranh giới mới: chỉ Python; các ngôn ngữ quét theo token vẫn dừng ở
+        ranh giới tệp."""
         (tmp_path / "helpers.py").write_text(
             "import os\ndef run(value):\n    os.system(value)\n", encoding="utf-8"
         )
@@ -304,8 +1407,7 @@ class TestDocumentedGaps:
             encoding="utf-8",
         )
         result = scan(str(tmp_path), Config())
-        assert not any(f.rule_id == "FSB-CMD-001" for f in result.findings)
-        assert any(f.rule_id == "FSB-CMD-003" for f in result.findings)
+        assert any(f.rule_id == "FSB-CMD-001" for f in result.findings)
 
     def test_gap_taint_stored_on_an_instance_attribute(self):
         source = (
@@ -340,3 +1442,121 @@ class TestDocumentedGaps:
         ids = rule_ids(source)
         assert "FSB-CMD-001" not in ids
         assert "FSB-CMD-003" in ids
+
+
+class TestRedosInOwnRegexes:
+    r"""Regex của chính công cụ chạy trên mã không tin cậy phải có chặn.
+
+    Đo được thật trước khi sửa: nhánh `select\s+.+?\bfrom\b` là lazy
+    dot-star nên một chuỗi 2 MB chứa "select" mà không có "from" khiến lượt
+    quết không bao giờ quay lại - và budget của engine không đếm thời gian
+    regex. Lỗi nằm ngoài mọi hạn mức, tức là một tệp 2 MB đủ để từ chối dịch
+    vụ.
+    """
+
+    def test_giant_select_without_from_does_not_hang_the_scan(self, tmp_path: Path):
+        hostile = "select " + "a" * 2_000_000
+        (tmp_path / "app.py").write_text(
+            "def f(db):\n    db.query('" + hostile + "')\n", encoding="utf-8"
+        )
+        start = time.monotonic()
+        scan(str(tmp_path), Config())
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "lượt quét phải kết thúc nhanh, mất %.2fs" % elapsed
+
+    def test_giant_select_in_token_language_does_not_hang(self, tmp_path: Path):
+        (tmp_path / "app.js").write_text(
+            'db.query("' + ("select x; " * 200_000) + '");\n', encoding="utf-8"
+        )
+        start = time.monotonic()
+        scan(str(tmp_path), Config())
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "lượt quét phải kết thúc nhanh, mất %.2fs" % elapsed
+
+    def test_real_sql_statement_is_still_recognized(self):
+        """Receiver không có hint (svc, không phải cursor) thì phép nhận dạng
+        SQL là thứ duy nhất quyết định - SQL thật phải vẫn được nhận ra sau
+        khi chặn ReDoS."""
+        source = (
+            "def f(svc, cond):\n"
+            "    sql = 'select id, name, email from users where active = 1"
+            " order by created_at desc'\n"
+            "    svc.execute(sql + cond)\n"
+        )
+        ids = rule_ids(source)
+        assert "FSB-SQL-002" in ids
+
+    def test_wide_column_list_before_from_is_still_sql(self):
+        """Cắt cụt đầu vào để chặn ReDoS từng sinh âm tính giả.
+
+        Một câu SELECT liệt kê 40 cột đã vượt 600 ký tự trước khi tới FROM -
+        hình dạng rất thường gặp trong mã doanh nghiệp. Với cửa sổ 256 ký tự
+        thì phần `from` nằm ngoài tầm nhìn và phát hiện biến mất hoàn toàn.
+        """
+        columns = ", ".join("customer_column_%02d" % index for index in range(40))
+        statement = "select %s from users where id = " % columns
+        assert len(statement) > 600
+        source = "def f(svc, cond):\n    svc.execute('%s' + cond)\n" % statement
+        assert "FSB-SQL-002" in rule_ids(source)
+
+    def test_wide_select_still_reported_in_token_languages(self, tmp_path: Path):
+        """Sink require_sql của bộ phân tích generic BỎ HẲN phát hiện khi
+        không nhận ra SQL, nên ở đây âm tính giả là mất trắng một lỗ hổng."""
+        columns = ", ".join("order_column_%02d" % index for index in range(40))
+        statement = "SELECT %s FROM orders WHERE id = " % columns
+        (tmp_path / "Dao.java").write_text(
+            "public class Dao {\n"
+            "  public Object find(String userId) {\n"
+            '    return jdbc.queryForObject("%s" + userId, Order.class);\n'
+            "  }\n}\n" % statement,
+            encoding="utf-8",
+        )
+        (tmp_path / "store.go").write_text(
+            "package main\n"
+            "func find(db *sql.DB, userId string) {\n"
+            '  db.Query("%s" + userId)\n'
+            "}\n" % statement,
+            encoding="utf-8",
+        )
+        result = scan(str(tmp_path), Config())
+        reported = {finding.path for finding in result.findings}
+        assert "Dao.java" in reported
+        assert "store.go" in reported
+
+    def test_select_without_from_across_megabytes_stays_linear(self):
+        """Chính là dạng làm regex lazy dot-star chạy mãi không quay lại."""
+        from fortress_scan.analysis.python.specs import looks_like_sql
+
+        payload = ("select " * 300_000)[:2_000_000]
+        start = time.monotonic()
+        assert looks_like_sql(payload) is False
+        assert time.monotonic() - start < 1.0
+
+
+class TestCodecBombs:
+    """Codec biến đổi byte khai báo trong # coding: là vector bomb giải nén.
+
+    zlib_codec nén 100MB chữ 'a' thành vài trăm KB; một tệp như vậy khai báo
+    đúng codec sẽ khiến raw.decode() tạo chuỗi GB ngoài mọi hạn mức. Giờ khai
+    báo đó bị bỏ qua và tệp đọc theo UTF-8 như bảng mã không tồn tại.
+    """
+
+    def test_zlib_codec_declaration_is_ignored(self, tmp_path: Path):
+        import zlib
+
+        bomb = zlib.compress(b"a" * 100_000_000, 9)  # ~ hàng chục KB nén
+        (tmp_path / "bomb.py").write_bytes(b"# -*- coding: zlib_codec -*-\nx = 1\n" + bomb)
+        start = time.monotonic()
+        scan(str(tmp_path), Config())
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0
+        # Không cần tệp được phân tích: nội dung giải theo UTF-8 toàn byte
+        # nén là nhị phân nên bị bỏ qua như mọi tệp nhị phân khác - điều quan
+        # trọng là lượt quét không nổ bộ nhớ và không treo.
+
+    def test_normal_codec_still_honored(self, tmp_path: Path):
+        (tmp_path / "ok.py").write_bytes(
+            "# -*- coding: utf-8 -*-\nx = ' unicorn '\n".encode("utf-8")
+        )
+        result = scan(str(tmp_path), Config())
+        assert result.stats.files_analyzed == 1

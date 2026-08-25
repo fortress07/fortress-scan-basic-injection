@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import socket
-import subprocess
+# Module này NHẬP subprocess chỉ để vá chặn nó ( xem _PROCESS_TARGETS bên
+# dưới ); công cụ không bao giờ chạy tiến trình nào.
+import subprocess  # nosec B404
 import sys
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -33,6 +35,10 @@ _NETWORK_TARGETS: Tuple[Tuple[Any, str], ...] = (
     (socket, "create_server"),
 )
 
+# Đây là dây chuyền cảnh báo chứ không phải rào cản: mã bị quét không bao giờ
+# được chạy, nên list này tồn tại để một lỗi tương lai nào đó chạm vào primitive
+# tạo tiến trình sẽ bị phát hiện ngay. Nhớ phủ cả các biến thể ``l`` của họ
+# exec*/spawn* -- trên nền tảng nào đó chúng tồn tại độc lập với họ ``v``.
 _PROCESS_TARGETS: Tuple[Tuple[Any, str], ...] = (
     (subprocess, "Popen"),
     (subprocess, "run"),
@@ -45,12 +51,31 @@ _PROCESS_TARGETS: Tuple[Tuple[Any, str], ...] = (
     (os, "execve"),
     (os, "execvp"),
     (os, "execvpe"),
+    (os, "execl"),
+    (os, "execle"),
+    (os, "execlp"),
     (os, "spawnv"),
     (os, "spawnve"),
+    (os, "spawnvp"),
+    (os, "spawnvpe"),
+    (os, "spawnl"),
+    (os, "spawnle"),
+    (os, "spawnlp"),
+    (os, "spawnlpe"),
     (os, "posix_spawn"),
+    (os, "posix_spawnp"),
     (os, "fork"),
     (os, "forkpty"),
+    (os, "startfile"),
 )
+
+# pty chỉ tồn tại trên POSIX; bỏ qua nếu nền tảng không có.
+try:
+    import pty
+except ImportError:
+    pty = None  # type: ignore[assignment]
+if pty is not None:
+    _PROCESS_TARGETS = _PROCESS_TARGETS + ((pty, "spawn"),)
 
 
 def engage() -> None:
@@ -93,6 +118,17 @@ def is_engaged() -> bool:
     return _PATCHED
 
 
+def _running_as_windows_admin() -> bool:
+    """Kểm tra quyền Administrator trên Windows; sai nền tảng hoặc lỗi probe
+    thì coi như không ( chỉ thiếu một dòng cảnh báo, không đáng ném lỗi )."""
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 def elevated_privilege_warnings() -> List[str]:
     warnings: List[str] = []
     getuid = getattr(os, "geteuid", None)
@@ -100,14 +136,8 @@ def elevated_privilege_warnings() -> List[str]:
         warnings.append(
             "đang chạy bằng quyền root; hãy quét mã không tin cậy bằng tài khoản thường"
         )
-    if os.name == "nt":
-        try:
-            import ctypes
-
-            if ctypes.windll.shell32.IsUserAnAdmin():
-                warnings.append(
-                    "đang chạy bằng quyền Administrator; hãy quét mã không tin cậy bằng tài khoản thường"
-                )
-        except Exception:
-            pass
+    if os.name == "nt" and _running_as_windows_admin():
+        warnings.append(
+            "đang chạy bằng quyền Administrator; hãy quét mã không tin cậy bằng tài khoản thường"
+        )
     return warnings
