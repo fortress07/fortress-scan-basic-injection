@@ -453,7 +453,7 @@ def test_readme_states_the_real_rule_count():
         "badge": r"badge/(\d+)-rule",
         "the thong ke": r"<b>(\d+)</b><br/><sub>rule</sub>",
         "tieu de muc": r"##.*?(\d+) rule trên",
-        "tieu de bieu do": r"title (\d+) rule",
+        "chu thich hinh": r'alt="(\d+) rule',
     }
     seen = {}
     for label, pattern in spots.items():

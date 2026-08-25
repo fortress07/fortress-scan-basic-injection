@@ -14,7 +14,7 @@ Bản này khép lại giai đoạn thử nghiệm. Trước nó, công cụ đ�
 toán; toàn bộ lịch sử đó nằm trong git, còn đây là mốc đầu tiên được phát hành như một sản phẩm.
 
 **35 rule trên 17 họ injection, đối chiếu OWASP Top 10:2025. 14 ngôn ngữ và định dạng.
-1177 kiểm tra tự động. Không phụ thuộc thư viện ngoài.**
+1185 kiểm tra tự động. Không phụ thuộc thư viện ngoài.**
 
 ### Phân tích sâu hơn, kêu oan ít hơn
 
@@ -234,6 +234,21 @@ Control; **chuỗi cung ứng** tách thành mục riêng thay vì nấp trong A
 Nhãn 2021 **vẫn được giữ nguyên đi kèm** trong cùng trường `owasp`, vì mã rule và khoá JSON của
 bản 0.1.0 là giao diện ổn định nên chỉ được thêm vào chứ không được thay bằng thứ người dùng cũ
 không tra ra. Cả hai đều có mặt trong JSON và trong `tags` của SARIF.
+
+### Hình minh hoạ được SINH ra, không vẽ tay
+
+README có bảy hình mô tả lại mô hình: đường đi của dữ liệu, sáu bước của một lượt quét, bộ rule
+theo mức độ và theo họ, đối chiếu OWASP, độ phủ ngôn ngữ, hai bộ phân tích đặt cạnh nhau, và bốn
+phép đo trước/sau khi vá. Mỗi hình có hai bản sáng và tối, nhúng bằng thẻ `<picture>` nên tự đổi
+theo chế độ màu của người đọc.
+
+Chúng do `tools/generate_diagrams.py` sinh ra chứ không vẽ tay, vì hình vẽ tay có một kiểu hỏng
+rất êm: thêm một rule là con số trên hình sai, mà hình vẫn hiện ra bình thường nên không ai nhận
+ra. Mọi con số trên hình đọc thẳng từ `core.registry`, còn `tests/test_diagrams.py` chạy lại bộ
+sinh rồi so từng byte với tệp đã commit. Sửa mã mà quên chạy lại là CI đỏ.
+
+Số đo hiệu năng không suy ra được từ mã nên nằm trong một bảng riêng của bộ sinh, kèm cả trung vị,
+khoảng min/max và số lần lặp ( 7 lần mỗi phép ).
 
 ### Thay đổi phá vỡ tương thích
 

@@ -13,7 +13,7 @@ Giao diện và báo cáo **hoàn toàn bằng tiếng Việt** cho anh em.
 [![rules](https://img.shields.io/badge/35-rule-e05d44?style=flat-square)](#-35-rule-trên-17-họ-injection)
 [![families](https://img.shields.io/badge/17-họ%20injection-fe7d37?style=flat-square)](#-35-rule-trên-17-họ-injection)
 [![languages](https://img.shields.io/badge/14-ngôn%20ngữ-4c1?style=flat-square)](#-quét-được-những-dự-án-nào-)
-[![tests](https://img.shields.io/badge/1177-kiểm%20tra%20tự%20động-4c1?style=flat-square)](tests/)
+[![tests](https://img.shields.io/badge/1185-kiểm%20tra%20tự%20động-4c1?style=flat-square)](tests/)
 [![owasp](https://img.shields.io/badge/OWASP%20Top%2010-2025-663399?style=flat-square)](#-đối-chiếu-owasp-top-102025)
 [![network](https://img.shields.io/badge/kết%20nối%20mạng-không%20bao%20giờ-critical?style=flat-square)](#-chỉ-đọc-và-in-báo-cáo-không-làm-gì-khác-)
 
@@ -53,21 +53,10 @@ app/routes.py
 
 ## 🎯 Công cụ này làm gì
 
-```mermaid
-flowchart LR
-    A["🌐 NGUỒN<br/>request.args<br/>$_GET · req.query"] --> B["🔀 LAN TRUYỀN<br/>gán · nối chuỗi<br/>f-string · gọi hàm"]
-    B --> C{"🧼 Có bị<br/>khử độc<br/>không ?"}
-    C -->|"CÓ<br/>shlex.quote · tham số hoá<br/>danh sách trắng"| D["✅ IM LẶNG<br/>không báo gì"]
-    C -->|"KHÔNG"| E["🔥 SINK<br/>os.system<br/>cursor.execute · eval"]
-    E --> F["🚨 PHÁT HIỆN<br/>kèm đường đi đầy đủ"]
-
-    style A fill:#1f6feb,color:#ffffff,stroke:#1f6feb,stroke-width:2px
-    style B fill:#8250df,color:#ffffff,stroke:#8250df,stroke-width:2px
-    style C fill:#bf8700,color:#ffffff,stroke:#bf8700,stroke-width:2px
-    style D fill:#1a7f37,color:#ffffff,stroke:#1a7f37,stroke-width:2px
-    style E fill:#cf222e,color:#ffffff,stroke:#cf222e,stroke-width:2px
-    style F fill:#a40e26,color:#ffffff,stroke:#a40e26,stroke-width:3px
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/taint-flow-dark.svg">
+  <img alt="Mô hình truy vết đường đi của dữ liệu: nguồn, lan truyền, khử độc, sink" src="docs/img/taint-flow-light.svg" width="100%">
+</picture>
 
 Chỉ khi dữ liệu bẩn **tới được sink mà chưa bị vô hiệu hoá** thì mới thành một phát hiện, và báo
 cáo in ra **cả đường đi** để anh em tự kiểm chứng chứ không bắt phải tin tuyệt đối.
@@ -81,35 +70,15 @@ cáo in ra **cả đường đi** để anh em tự kiểm chứng chứ không 
 <td align="center"><b>35</b><br/><sub>rule</sub></td>
 <td align="center"><b>17</b><br/><sub>họ injection</sub></td>
 <td align="center"><b>14</b><br/><sub>ngôn ngữ &amp; định dạng</sub></td>
-<td align="center"><b>1177</b><br/><sub>kiểm tra tự động</sub></td>
+<td align="center"><b>1185</b><br/><sub>kiểm tra tự động</sub></td>
 <td align="center"><b>0</b><br/><sub>phụ thuộc ngoài</sub></td>
 </tr>
 </table>
 
-### Mức độ nghiêm trọng của 35 rule
-
-| Mức | Số rule | Biểu đồ |
-| :--- | ---: | :--- |
-| 🔴 **critical** | **10** | 🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥 |
-| 🟠 **high** | **12** | 🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧 |
-| 🟡 **medium** | **10** | 🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨 |
-| 🔵 **low** | **3** | 🟦🟦🟦 |
-
-### 35 rule chia theo họ lỗ hổng
-
-```mermaid
-pie showData
-    title Số rule trên từng họ
-    "OS command" : 5
-    "Supply chain" : 4
-    "Trojan Source / unicode" : 4
-    "Code execution" : 3
-    "SQL" : 2
-    "Template (SSTI)" : 2
-    "Deserialization" : 2
-    "Dynamic import" : 2
-    "Còn lại (9 họ, mỗi họ 1)" : 9
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/rules-dark.svg">
+  <img alt="35 rule nhìn theo mức độ nghiêm trọng và theo họ lỗ hổng" src="docs/img/rules-light.svg" width="100%">
+</picture>
 
 ---
 
@@ -119,15 +88,10 @@ Bản 0.1.0 gắn nhãn theo **OWASP Top 10:2025**, và giữ luôn nhãn **2021
 ( báo cáo tuân thủ, bảng điều khiển code scanning ) vẫn đang tính theo bản cũ. Cả hai đều có mặt
 trong JSON và SARIF nên anh em lọc theo bản nào cũng được.
 
-```mermaid
-pie showData
-    title 35 rule đối chiếu OWASP Top 10:2025
-    "A05 Injection" : 20
-    "A08 Software or Data Integrity Failures" : 7
-    "A03 Software Supply Chain Failures" : 4
-    "A01 Broken Access Control" : 3
-    "A02 Security Misconfiguration" : 1
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/owasp-2025-dark.svg">
+  <img alt="35 rule đối chiếu OWASP Top 10:2025 trên năm mục" src="docs/img/owasp-2025-light.svg" width="100%">
+</picture>
 
 | OWASP Top 10:2025 | Rule của Fortress Scan | Nhãn 2021 đi kèm |
 | :--- | :--- | :--- |
@@ -142,6 +106,39 @@ pie showData
 > **SSRF** thôi đứng riêng ( A10:2021 ) và về chung với Broken Access Control;
 > **chuỗi cung ứng** tách hẳn thành một mục riêng thay vì nấp trong A08;
 > còn **path traversal** và **open redirect** về đúng nhà A01 thay vì bị gộp chung vào Injection.
+
+---
+
+## 🧪 Công cụ tự soi lại chính nó
+
+Một bộ dò lỗ hổng mà tự nó thủng thì tệ hơn là không có, vì nó còn kèm theo một tờ giấy chứng nhận
+"sạch". Nên bản 0.1.0 dành hẳn một vòng để **tự tấn công mình** theo đúng mô hình đe doạ của người
+dùng: kẻ tấn công không chạy được mã trên máy anh em, nhưng đặt được nội dung vào một repo rồi nhờ
+anh em quét nó.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/benchmarks-dark.svg">
+  <img alt="Bốn phép đo trước và sau khi vá, mỗi phép lặp 7 lần lấy trung vị" src="docs/img/benchmarks-light.svg" width="100%">
+</picture>
+
+Vòng này tìm ra **bốn chỗ**, và ba trong bốn nằm đúng ở phần công cụ tự nhận là đã siết:
+
+| Lỗ hổng | Kích hoạt bằng | Đã vá bằng |
+| :--- | :--- | :--- |
+| 🔴 **Đọc trọn tệp ignore vào RAM** | một `.gitignore` gồm toàn dòng chú thích, không sinh quy tắc nào | trần kích thước đứng **trước** phép đọc |
+| 🔴 **Chi phí so khớp không có trần cộng dồn** | một `.gitignore` 15 KB hợp lệ về mọi mặt | lọc trước chính xác, cộng hạn mức chung cho cả lượt quét |
+| 🟠 **Tiêm chuỗi thoát vào terminal** | đặt tên tệp kèm `U+202E` hoặc `\x1b[2K` | trung hoà tên tệp trước khi đưa cho `ast.parse()` |
+| 🟠 **Mười đường lách tắt cảnh báo** | chỉ thị giấu trong `%q{}` của Ruby, `<<eot` của Perl | mô tả đúng hai dạng chuỗi đó cho bộ mặt nạ |
+
+> [!NOTE]
+> Chỗ thứ hai hoá ra **không chỉ là chuyện an ninh**. Một `.gitignore` bình thường cũng đang tốn
+> quá nhiều công so khớp, nên phép vá làm lượt quét của **mọi người** nhanh hơn **37 lần** ở khâu
+> đó, chứ không riêng lúc bị tấn công. Phép đo đối chứng ( quét chính `src/` ) có khoảng đo chồng
+> lên nhau, tức là phần vá không làm chậm đường chạy bình thường.
+
+Cả bốn đều có kiểm tra hồi quy, và phép lọc trước còn bị khoá thêm bằng một bài đối chiếu
+**3.000 cặp mẫu và đường dẫn ngẫu nhiên** với chính bảng quy hoạch động, để chắc nó là tối ưu chứ
+không phải một luật khớp mới.
 
 ---
 
@@ -186,22 +183,34 @@ Xem đầy đủ bằng `python -m fortress_scan --list-rules`, và giải thíc
 Python có parser AST cộng phân tích luồng dữ liệu nên **sâu hơn hẳn**. Các ngôn ngữ còn lại phân
 tích theo token nên chỉ bắt được dạng "nguồn → biến → sink" trong cùng một hàm.
 
-| Ngôn ngữ | Độ phủ | Bắt được |
-| :--- | :--- | :--- |
-| 🐍 **Python** <sub>Flask, Django, FastAPI</sub> | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 **27/35** | command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode, path, SSRF, redirect, header |
-| 🟨 **JavaScript / TypeScript** <sub>Express, Node</sub> | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | command, `eval`, SQL, dynamic `require`, XSS, SSRF, redirect, path, header |
-| 🐘 **PHP** <sub>`$_GET` / `$_POST`</sub> | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | command, `eval`, SQL, `include`, `unserialize`, SSRF, path, `header()` |
-| 🌙 **Lua** <sub>OpenResty `ngx.*`</sub> | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | `loadstring`, `os.execute`, `io.popen`, SQL, path, `ngx.redirect` |
-| 🦀 **Rust** <sub>actix, axum</sub> | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | command, SQL, path, SSRF, template, nạp thư viện động |
-| 💠 **PowerShell** <sub>script build, script CI</sub> | 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ | `Invoke-Expression`, tạo tiến trình, SQL, `Import-Module`, path, SSRF |
-| 🐫 **Perl** <sub>CGI `$q->param`</sub> | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | command, `eval`, `open` hai đối số, SQL ( DBI ), `Storable::thaw` |
-| 💎 **Ruby** <sub>Rails `params`</sub> | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | command, `eval`, template ( ERB ), `Marshal.load` |
-| ⚙️ **Workflow GitHub Actions** | 🟩🟩🟩⬜⬜⬜⬜⬜⬜⬜ | injection biểu thức, pwn request, action ghim bằng nhãn di động |
-| ☕ **Java / JVM** <sub>Servlet</sub> | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | command, SQL, expression language ( SpEL ) |
-| 🐹 **Go** <sub>`net/http`</sub> | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | command, SQL, template |
-| 📦 **`package.json`** | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | script vòng đời tải mã từ xa về chạy |
-| 🐚 **Shell** <sub>bash, sh</sub> | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | `eval`, biến không đặt trong nháy kép |
-| 🟦 **C#** <sub>ASP.NET</sub> | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | SQL |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/languages-dark.svg">
+  <img alt="Độ phủ trên 14 ngôn ngữ và định dạng" src="docs/img/languages-light.svg" width="100%">
+</picture>
+
+<details>
+<summary><b>📖 Từng ngôn ngữ bắt được cụ thể những gì ( bấm để mở )</b></summary>
+
+<br/>
+
+| Ngôn ngữ | Bắt được |
+| :--- | :--- |
+| 🐍 **Python** <sub>Flask, Django, FastAPI</sub> | command, SQL, code, template, import, deser, NoSQL, LDAP, XPath, reflection, XSS, XXE, unicode, path, SSRF, redirect, header |
+| 🟨 **JavaScript / TypeScript** <sub>Express, Node</sub> | command, `eval`, SQL, dynamic `require`, XSS, SSRF, redirect, path, header |
+| 🐘 **PHP** <sub>`$_GET` / `$_POST`</sub> | command, `eval`, SQL, `include`, `unserialize`, SSRF, path, `header()` |
+| 🌙 **Lua** <sub>OpenResty `ngx.*`</sub> | `loadstring`, `os.execute`, `io.popen`, SQL, path, `ngx.redirect` |
+| 🦀 **Rust** <sub>actix, axum</sub> | command, SQL, path, SSRF, template, nạp thư viện động |
+| 💠 **PowerShell** <sub>script build, script CI</sub> | `Invoke-Expression`, tạo tiến trình, SQL, `Import-Module`, path, SSRF |
+| 🐫 **Perl** <sub>CGI `$q->param`</sub> | command, `eval`, `open` hai đối số, SQL ( DBI ), `Storable::thaw` |
+| 💎 **Ruby** <sub>Rails `params`</sub> | command, `eval`, template ( ERB ), `Marshal.load` |
+| ⚙️ **Workflow GitHub Actions** | injection biểu thức, pwn request, action ghim bằng nhãn di động |
+| ☕ **Java / JVM** <sub>Servlet</sub> | command, SQL, expression language ( SpEL ) |
+| 🐹 **Go** <sub>`net/http`</sub> | command, SQL, template |
+| 📦 **`package.json`** | script vòng đời tải mã từ xa về chạy |
+| 🐚 **Shell** <sub>bash, sh</sub> | `eval`, biến không đặt trong nháy kép |
+| 🟦 **C#** <sub>ASP.NET</sub> | SQL |
+
+</details>
 
 <details>
 <summary><b>📖 Nguồn dữ liệu Python được nhận ra ( bấm để mở )</b></summary>
@@ -288,32 +297,17 @@ Hai thư mục trên có **cùng chức năng**, chỉ khác ở chỗ một bê
 
 Khi gõ lệnh quét thì có sáu bước xảy ra:
 
-```mermaid
-flowchart TD
-    S(["📂 Mã nguồn của anh em"]) --> S1
-    S1["<b>1. Khoá tiến trình</b><br/>vá socket, subprocess, os.system<br/><i>dù có lỗi cũng không chạy được mã, không gọi mạng</i>"] --> S2
-    S2["<b>2. Tìm tệp</b><br/>bỏ thư mục loại trừ, tệp nhị phân, tệp quá lớn<br/><i>không đi theo liên kết trỏ ra ngoài</i>"] --> S3
-    S3["<b>3. Đọc và giải mã</b><br/>Python giải mã đúng theo khai báo <code>coding:</code><br/><i>để thấy đúng thứ CPython sẽ chạy</i>"] --> S4
-    S4["<b>4. Phân tích</b><br/>truy vết đường đi của dữ liệu"] --> S5
-    S5["<b>5. Lọc</b><br/>chú thích tắt cảnh báo → ngưỡng → rule bị tắt → baseline"] --> S6
-    S6["<b>6. Báo cáo</b><br/>console · JSON · SARIF · Markdown + mã thoát"]
-
-    style S fill:#57606a,color:#ffffff,stroke:#57606a
-    style S1 fill:#cf222e,color:#ffffff,stroke:#cf222e
-    style S2 fill:#bc4c00,color:#ffffff,stroke:#bc4c00
-    style S3 fill:#bf8700,color:#ffffff,stroke:#bf8700
-    style S4 fill:#1a7f37,color:#ffffff,stroke:#1a7f37
-    style S5 fill:#1f6feb,color:#ffffff,stroke:#1f6feb
-    style S6 fill:#8250df,color:#ffffff,stroke:#8250df
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/pipeline-dark.svg">
+  <img alt="Sáu bước của một lượt quét, từ khoá tiến trình tới báo cáo" src="docs/img/pipeline-light.svg" width="100%">
+</picture>
 
 ### Hai bộ phân tích
 
-| | 🐍 Python | 🌍 Các ngôn ngữ còn lại |
-| :--- | :--- | :--- |
-| **Cách đọc mã** | dựng cây cú pháp đầy đủ ( AST ) | tách token bằng lexer riêng từng ngôn ngữ |
-| **Theo dữ liệu** | qua `if`, vòng lặp, `try`, và qua hàm khác cùng tệp | trong phạm vi một hàm |
-| **Kết quả** | sâu nhất, đủ 27/35 rule, **theo được taint xuyên file** | bắt dạng "nguồn → biến → sink" cùng hàm |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/analyzers-dark.svg">
+  <img alt="So sánh bộ phân tích AST cho Python với bộ quét theo token cho 13 ngôn ngữ còn lại" src="docs/img/analyzers-light.svg" width="100%">
+</picture>
 
 Rẽ nhánh thì hai nhánh được **gộp lại** ( nhiễm ở một nhánh là đủ để cảnh báo ), vòng lặp chỉ chạy
 vài vòng rồi dừng, và mỗi tệp có **ngân sách** số node/token nên một tệp dựng riêng để làm treo
