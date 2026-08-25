@@ -599,6 +599,24 @@ cho anh em, một ngôi sao ⭐ trên GitHub của mọi người là nguồn đ
 
 ---
 
+## 🚀 Phát hành
+
+Anh em nào tự dựng bản phát hành ( hoặc fork về rồi muốn tự đẩy lên ) thì
+[`docs/RELEASE.md`](docs/RELEASE.md) có hướng dẫn từng bước: kiểm tra trước khi
+phát hành, đẩy nhánh, gắn tag, dựng gói, tạo Release trên GitHub, và cách lùi
+lại nếu có gì hỏng.
+
+Hình minh hoạ trong README **được sinh ra chứ không vẽ tay**, nên sửa mã xong
+thì chạy lại:
+
+```bash
+python tools/generate_diagrams.py
+```
+
+Quên chạy thì `tests/test_diagrams.py` sẽ đỏ, kèm đúng câu lệnh cần gõ.
+
+---
+
 ## 📄 Giấy phép
 
 [MIT](LICENSE), dùng tự do cho cả mục đích cá nhân và thương mại.
